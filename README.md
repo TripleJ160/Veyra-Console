@@ -2,6 +2,17 @@
 
 **Console video, comfortable on your desktop.** A Windows capture-card fork of [Likely7/Veyra-NRVideo](https://github.com/Likely7/Veyra-NRVideo), with independent controls for **motion delivery** and **image appearance**. Compare original pictures, frame generation and neural-restoration looks without rebuilding your capture, audio or window setup.
 
+## TL;DR — what's different from regular Veyra?
+
+**Regular Veyra already has AI image enhancement and frame generation. This fork makes those features easier to use for playing a console through a capture card.** Compared with Veyra **v2.1.5**, the main changes are:
+
+- **Easy motion choices:** four presets let you keep the original pictures or try frame generation, which adds pictures between captured frames to smooth motion.
+- **Separate image looks:** seven choices range from enhancement off to subtle or stronger AI changes. Switching a look keeps your motion, capture, audio and window settings. An easy blend slider helps keep more of the game's original appearance.
+- **More convenient desktop viewing:** a normal Windows title bar lets you drag the player into FancyZones layouts. Full-height viewing and aspect-ratio fitting keep the game picture correctly proportioned.
+- **Clearer settings and status:** see which motion preset and image look are selected, when you've customized them, and what capture format is actually connected rather than just requested.
+
+**The underlying AI models and filters come from upstream.** This is mainly a console-focused usability and diagnostics fork; it has not been proven universally sharper, faster or free of stutters. **The public release is currently source-only**, with no ready-to-run Windows download; details below.
+
 Developed from a private RTX 5090 / PS5 investigation. This independent GPL-3.0 project is not an NVIDIA, Elgato, Sony or upstream Veyra release. The enhancement algorithms are inherited; this fork makes their use and limitations clearer.
 
 [Source preview](https://github.com/TripleJ160/Veyra-Console/releases) · [Runtime installation](docs/console/RUNTIMES.md) · [Build](docs/console/BUILD.md) · [Evidence](docs/console/EVIDENCE.md) · [Original README](README.upstream.md)
