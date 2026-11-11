@@ -102,6 +102,16 @@ Looks retain FG/multiplier/content timing, AA, color, capture, audio and geometr
 
 *Settings comparison within this fork, using the same 1440p sequence and final crop. Not a fork-versus-upstream quality comparison or recovered ground truth. [Method and limits](docs/console/EVIDENCE.md).*
 
+### Community NR appearance comparison
+
+Two user-supplied screenshots of the same scene, preserved at their original **3840×2160** resolution. Click either image to inspect the full-size PNG.
+
+| Screenshot A | Screenshot B |
+|---|---|
+| [![NR appearance comparison, screenshot A](docs/images/console/user-nr-example-a.png)](docs/images/console/user-nr-example-a.png) | [![NR appearance comparison, screenshot B](docs/images/console/user-nr-example-b.png)](docs/images/console/user-nr-example-b.png) |
+
+*The exact NR model, correction strength and on/off assignment were not recorded with these images. They illustrate appearance differences, rather than a controlled quality benchmark. A lower correction blend can retain more of the source's art style; see the Subtle and Balanced looks above.*
+
 ## Anti-aliasing: working does not mean necessary
 
 All four methods executed in bounded native-1440p video checks with NR off/on. Spatial methods improved controlled edges against a supersampled reference. Console video already contains game AA/upscaling, so differences can be subtle. **AA off** is a faithful default. Try **SMAA High**, temporal accumulation off, for residual jaggies. Enable the AA card as well as choosing a method.
