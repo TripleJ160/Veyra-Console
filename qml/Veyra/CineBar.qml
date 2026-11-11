@@ -62,13 +62,16 @@ Rectangle {
 
         // --- left: artwork + title (230px) ---------------------------
         RowLayout {
-            Layout.preferredWidth: 230; Layout.minimumWidth: 140; Layout.maximumWidth: 230
+            Layout.preferredWidth: bar.width >= 1000 ? 230 : 56
+            Layout.minimumWidth: bar.width >= 1000 ? 140 : 56
+            Layout.maximumWidth: bar.width >= 1000 ? 230 : 56
             Layout.fillHeight: true
             spacing: 10
             // The file's own cover art when it carries one (MP4 covr, MKV image
             // attachment); otherwise the plate stays black - never a stand-in.
             Rectangle {
                 id: coverPlate
+                visible: bar.width >= 1000
                 implicitWidth: 46; implicitHeight: 46; radius: 12
                 color: Theme.videoBlack
                 border.width: 1
@@ -99,6 +102,7 @@ Rectangle {
                 Rectangle { id: coverMask; anchors.fill: coverArt; radius: 11; visible: false; layer.enabled: true }
             }
             ColumnLayout {
+                visible: bar.width >= 1000
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignVCenter
                 spacing: 2
@@ -121,7 +125,14 @@ Rectangle {
                 }
             }
             VButton {
+                objectName: "cine-profile-info"
+                text: "Info"; tip: "Viewing profile and actual playback status"
+                implicitWidth: 56; implicitHeight: 32
+                onClicked: bar.requestDialog("console-profile")
+            }
+            VButton {
                 objectName: "cine-playlist"
+                visible: bar.width >= 1000
                 icon: true; iconName: "list"; tip: qsTr("播放列表")
                 implicitWidth: 32; implicitHeight: 32
                 onClicked: bar.requestPlaylist()
@@ -379,7 +390,7 @@ Rectangle {
 
         // --- right: preset, volume, fullscreen (230px) ---------------
         RowLayout {
-            Layout.preferredWidth: 308; Layout.minimumWidth: 308; Layout.maximumWidth: 308
+            Layout.preferredWidth: 400; Layout.minimumWidth: 400; Layout.maximumWidth: 400
             Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
             spacing: 6
 
@@ -387,7 +398,8 @@ Rectangle {
             // the label is the preset actually in use.
             VPill {
                 key: ""
-                value: veyra.currentPresetName
+                value: veyra.currentPresetName + " · " + veyra.currentNrLookName
+                maxTextWidth: 145
                 onClicked: presetMenu.openAt(this, "up")
                 Rectangle {
                     width: 7; height: 7; radius: 3.5
@@ -420,6 +432,7 @@ Rectangle {
             RotateButton { objectName: "cine-rotate" }
 
             Item {
+                objectName: "cine-fullscreen"
                 implicitWidth: 32; implicitHeight: 32
                 VIcon {
                     anchors.centerIn: parent
@@ -452,13 +465,20 @@ Rectangle {
         aboveLimit: bar.menuBottomLimit
         title: qsTr("预设")
         readonly property var mk: p => ({ label: p.name, note: p.note, checked: p.name === veyra.currentPresetName,
-                                          tag: p.nodeMode ? qsTr("节点") : "", preset: p.index })
-        items: [{ head: qsTr("列表预设") }].concat(veyra.presets.filter(p => !p.nodeMode).map(mk))
+                                          tag: p.nodeMode ? qsTr("节点") : "", preset: p.index, viewing: p.viewing })
+        items: [{ head: "Image enhancement / NR look" }]
+            .concat(veyra.nrLooks.map(p => ({label: p.name, note: p.available ? p.note : p.reason, checked: p.name === veyra.currentNrLookName, look: p.index})))
+            .concat([{head: veyra.protectionEnabled ? "NR protection ON · does not protect FG" : "NR protection OFF · regions retained"}])
+            .concat([{ head: qsTr("列表预设") }]).concat(veyra.presets.filter(p => !p.nodeMode).map(mk))
             .concat([{ head: qsTr("节点预设") }]).concat(veyra.presets.filter(p => p.nodeMode).map(mk))
             .concat([{ sep: true }, { label: qsTr("去专业模式管理预设…"), icon: "sliders", act: "pro" }])
         onPicked: (i, o) => {
-            if (o.act === "pro") bar.requestPage("pro")
-            else veyra.applyPresetIndex(o.preset)
+            if (o.look !== undefined) veyra.applyNrLookIndex(o.look)
+            else if (o.act === "pro") bar.requestPage("pro")
+            else {
+                if (o.viewing) veyra.nodeMode = 0
+                veyra.applyPresetIndex(o.preset)
+            }
         }
     }
 
@@ -525,7 +545,8 @@ Rectangle {
         items: veyra.audioTracks.length > 0
                ? veyra.audioTracks.map(mk).concat([{ sep: true },
                      { label: qsTr("音频设置…"), note: qsTr("输出设备、音画同步、偏移"), icon: "music", act: "dlg" }])
-               : [{ label: qsTr("片源没有音轨或尚未打开"), disabled: true }]
+               : [{ label: veyra.isCapture ? qsTr("Live capture audio · no selectable tracks") : qsTr("片源没有音轨或尚未打开"), disabled: true },
+                  { label: qsTr("音频设置…"), note: qsTr("输出设备、音画同步、偏移"), icon: "music", act: "dlg" }]
         onPicked: (i, o) => {
             if (o.act === "dlg") return bar.requestDialog("audio")
             if (o.index !== undefined) veyra.selectedAudioTrack = o.index

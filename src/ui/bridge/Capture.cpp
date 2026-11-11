@@ -71,6 +71,23 @@ QVariantList QmlPlayerBridge::captureFormats() const {
     });
 }
 QString QmlPlayerBridge::captureFormatKey() const { return utf8Of(impl_->captureFormatKey); }
+QString QmlPlayerBridge::captureConnectedSummary() const {
+    const auto& s=impl_->snapshot;
+    if(!s.capture||!s.running||!s.sourceWidth)return {};
+    return QStringLiteral("%1 × %2 · %3 fps · %4").arg(s.sourceWidth).arg(s.sourceHeight)
+        .arg(s.nominalSourceFps,0,'f',3).arg(s.captureTransportPixel.empty()?QStringLiteral("unknown format"):utf8Of(s.captureTransportPixel));
+}
+QString QmlPlayerBridge::captureInputColorText() const {
+    const auto& s=impl_->snapshot;if(!s.capture||!s.running||!s.sourceWidth)return {};
+    const auto& c=s.sourceInputColor;
+    using namespace pipeline;
+    const auto assumed=[](bool value){return value?QStringLiteral(" (fallback)"):QString();};
+    const QString matrix=c.matrix==YuvMatrix::BT709?"BT.709":c.matrix==YuvMatrix::BT601?"BT.601":c.matrix==YuvMatrix::BT2020NCL?"BT.2020 NCL":c.matrix==YuvMatrix::BT2020CL?"BT.2020 CL":"unknown matrix";
+    const QString range=c.range==ColorRange::Limited?"limited range":c.range==ColorRange::Full?"full range":"unknown range";
+    const QString transfer=c.transfer==TransferFunction::PQ?"PQ":c.transfer==TransferFunction::HLG?"HLG":c.transfer==TransferFunction::BT709?"BT.709":c.transfer==TransferFunction::SRGB?"sRGB":c.transfer==TransferFunction::Linear?"linear":c.transfer==TransferFunction::BT2020_10?"BT.2020 SDR":"unknown transfer";
+    return matrix+assumed(c.matrixAssumed)+" · "+range+assumed(c.rangeAssumed)+" · "+transfer+assumed(c.transferAssumed)+
+        (c.preserveSdrCodeValues?QStringLiteral(" · SDR code values preserved"):QString());
+}
 QString QmlPlayerBridge::captureFormatLabel() const {
     if (impl_->captureFormatKey.empty()) return {};
     for (const auto& f : impl_->captureFormatList)

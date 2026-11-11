@@ -130,6 +130,9 @@ class QmlPlayerBridge : public QObject {
     // The selected format's label ("" when none) and whether it gets the cost hint, so the
     // dialog never searches captureFormats itself (logs(18): 15474 formats hung it).
     Q_PROPERTY(QString captureFormatLabel READ captureFormatLabel NOTIFY captureChanged)
+    Q_PROPERTY(QString captureConnectedSummary READ captureConnectedSummary NOTIFY snapshotChanged)
+    Q_PROPERTY(QVariantMap consolePlaybackStatus READ consolePlaybackStatus NOTIFY snapshotChanged)
+    Q_PROPERTY(QString captureInputColorText READ captureInputColorText NOTIFY snapshotChanged)
     Q_PROPERTY(bool captureFormatCostHint READ captureFormatCostHint NOTIFY captureChanged)
     // Resolution, frame rate and pixel format are three views of captureFormatKey.
     // Changing one retargets that key to a media type the device actually enumerated.
@@ -552,6 +555,8 @@ class QmlPlayerBridge : public QObject {
     // The name of the preset currently in effect, or "自定义" when the
     // settings no longer match any stored preset. Derived, never guessed.
     Q_PROPERTY(QString currentPresetName READ currentPresetName NOTIFY settingsChanged)
+    Q_PROPERTY(QVariantList nrLooks READ nrLooks NOTIFY settingsChanged)
+    Q_PROPERTY(QString currentNrLookName READ currentNrLookName NOTIFY settingsChanged)
     Q_PROPERTY(QVariantList audioTracks READ audioTracks NOTIFY snapshotChanged)
     Q_PROPERTY(int selectedAudioTrack READ selectedAudioTrack WRITE setSelectedAudioTrack NOTIFY snapshotChanged)
     // The last capture session the user actually ran, for the home page's
@@ -722,6 +727,9 @@ public:
     QVariantList captureFormats() const;
     QString captureFormatKey() const;
     QString captureFormatLabel() const;
+    QString captureConnectedSummary() const;
+    QVariantMap consolePlaybackStatus() const;
+    QString captureInputColorText() const;
     bool captureFormatCostHint() const;
     void setCaptureFormatKey(const QString& key);
     QVariantList captureResolutionOptions() const;
@@ -1223,6 +1231,10 @@ public:
     QVariantList recentFiles() const;
     QVariantList presets() const;
     QString currentPresetName() const;
+    Q_INVOKABLE QVariantList processingChain(bool stillImage, bool nrFirst) const;
+    QVariantList nrLooks() const;
+    QString currentNrLookName() const;
+    Q_INVOKABLE bool applyNrLookIndex(int index);
     QVariantList audioTracks() const;
     int selectedAudioTrack() const;
     void setSelectedAudioTrack(int index);

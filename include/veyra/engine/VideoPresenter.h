@@ -47,6 +47,7 @@ public:
     PresentationSettings configurePresentation(gfx::D3D12DeviceContext&,PresentationSettings,bool fg,std::wstring& status);
     bool presentationReady(){return sink_.presentationReady();}
     gfx::PresentSink::RefreshGrid refreshGrid()const{return sink_.refreshGrid();}
+    void requireRefreshGrid(bool required){sink_.requireRefreshGrid(required);}
     bool waitPresentationReady(unsigned ms){return sink_.waitPresentationReady(ms);}
     uint64_t beginReflex(){const auto id=reflexInputFrame_;reflexInputFrame_=0;reflex_.renderStart(id);return id;}
     void endReflex(uint64_t id){reflex_.renderEnd(id);}

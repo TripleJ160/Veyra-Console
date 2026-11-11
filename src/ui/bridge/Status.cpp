@@ -2,6 +2,58 @@
 #include "../QmlPlayerBridge_p.h"
 
 namespace veyra::ui {
+QVariantMap QmlPlayerBridge::consolePlaybackStatus() const {
+    // Read the existing UI-owned snapshot only. No device queries, new timer,
+    // classifier or scheduling decision belongs in this presentation layer.
+    const auto& s=impl_->snapshot;
+    QString headline;
+    QStringList detail;
+    detail << QStringLiteral("Veyra %1 · Selected preset: %2").arg(version(), currentPresetName());
+    const auto backend=engine::frameGenerationBackendName(s.applied.frameGenerationBackend);
+    const auto contentMode=[&]{
+        switch(s.applied.content){
+        case engine::ContentRate::Transport:return QStringLiteral("Transport (no duplicate removal)");
+        case engine::ContentRate::Auto:return QStringLiteral("Auto duplicate removal");
+        case engine::ContentRate::Fps30:return QStringLiteral("Duplicate removal with 30-picture timing hint");
+        case engine::ContentRate::Fps50:return QStringLiteral("Duplicate removal with 50-picture timing hint");
+        case engine::ContentRate::Fps60:return QStringLiteral("Duplicate removal with 60-picture timing hint");
+        case engine::ContentRate::Capture60To30:return QStringLiteral("Forced 60→30 sampling (modified)");
+        }
+        return QStringLiteral("Unknown");
+    };
+    if(s.failed)headline=QStringLiteral("Playback error — see status");
+    else if(!s.running)headline=QStringLiteral("Not connected");
+    else if(s.applying)headline=QStringLiteral("Applying settings");
+    else if(s.transport==engine::TransportState::Paused)headline=QStringLiteral("Paused");
+    else if(s.captureRecovering)headline=QStringLiteral("Capture reconnecting");
+    else if(!s.capture)headline=QStringLiteral("File playback — capture dedup inactive");
+    else if(s.fgActive)headline=QStringLiteral("%1 active · %2× · %3").arg(QString::fromLatin1(backend.data(),qsizetype(backend.size()))).arg(s.applied.multiplier)
+        .arg(s.applied.content==engine::ContentRate::Auto?QStringLiteral("Auto dedup"):QStringLiteral("transport / selected content mode"));
+    else headline=QStringLiteral("Original pictures · FG inactive");
+    if(s.running){
+        detail<<QStringLiteral("Applied content mode: %1 · FG: %2 %3× · Lite: %4")
+            .arg(contentMode()).arg(QString::fromLatin1(backend.data(), qsizetype(backend.size())))
+            .arg(s.applied.multiplier).arg(s.applied.dlssgLite?QStringLiteral("ON (modified)"):QStringLiteral("off"));
+        if(s.capture){
+            detail<<QStringLiteral("Connected USB capture: %1").arg(captureConnectedSummary());
+            detail<<QStringLiteral("Capture delivery: %1 fps").arg(s.captureFps,0,'f',2);
+            detail<<captureInputColorText();
+            if(s.applied.content==engine::ContentRate::Auto){
+                detail<<(s.contentFps>0?QStringLiteral("Retained-picture timing estimate: ~%1 fps (approximate; may include static holds)").arg(s.contentFps)
+                    :QStringLiteral("Retained-picture timing estimate: not established"));
+                detail<<QStringLiteral("Intentionally skipped capture samples: %1 · Capture drops/overwrites: %2 (session counts)")
+                    .arg(s.captureRateSkipped).arg(s.captureDropped);
+            }else detail<<QStringLiteral("Picture classification: off; original transport deliveries retained, including repeats.");
+        }
+        detail<<(s.submissionFps?QStringLiteral("Present submissions: %1 fps (not measured display cadence)").arg(*s.submissionFps,0,'f',2)
+            :QStringLiteral("Present submission rate: not established"));
+        const auto& c=s.metrics.flow.counters;
+        detail<<QStringLiteral("Current metrics window: %1 original / %2 generated submissions").arg(c.realPresented).arg(c.generatedPresented);
+        if(s.applying)detail<<QStringLiteral("Settings are changing; numbers above describe the last applied snapshot.");
+    }
+    detail<<QStringLiteral("Capture delivery and retained-picture estimates are not game-engine FPS. Display cadence and controller latency are not measured here.");
+    return {{"headline",headline},{"details",detail.join('\n')}};
+}
 // --- professional-page readouts ---------------------------------------------
 // These read fields the engine genuinely publishes. Where it publishes nothing,
 // the getter says so and the UI shows an explicit "unmeasured" rather than a

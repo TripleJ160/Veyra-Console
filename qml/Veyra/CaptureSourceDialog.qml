@@ -10,7 +10,9 @@ DialogLayer {
     key: "capture"
     glyph: "video"
     title: qsTr("采集卡")
-    sub: qsTr("连接设备后，先关闭增强确认基础画面，再按需开启")
+    sub: veyra.captureConnectedSummary.length
+         ? qsTr("Connected: ") + veyra.captureConnectedSummary + "\n" + veyra.captureInputColorText
+         : qsTr("连接设备后，先关闭增强确认基础画面，再按需开启")
     dialogWidth: 660
     foot: qsTr("关闭其他占用同一采集卡的软件")
     actions: [
@@ -106,8 +108,7 @@ DialogLayer {
             Text {
                 Layout.fillWidth: true
                 text: captureDialog.live
-                      ? veyra.sourceSummary.replace("x", "×") + " · " + veyra.captureFps.toFixed(2) + " fps"
-                        + (veyra.sourceFormatText.split(" · ").length > 2 ? " · " + veyra.sourceFormatText.split(" · ")[1] : "")
+                      ? veyra.captureConnectedSummary
                       : (veyra.captureFormatLabel.length ? veyra.captureFormatLabel : qsTr("选择设备和格式后连接"))
                 color: Theme.t2
                 font.family: Theme.fontMono
@@ -117,7 +118,26 @@ DialogLayer {
         }
     }
 
-    DialogSection { text: qsTr("设备") }
+    DialogSection { text: qsTr("Connected capture — current session") }
+    Text {
+        objectName: "capture-connected-details"
+        Layout.fillWidth: true
+        wrapMode: Text.Wrap
+        text: veyra.captureConnectedSummary.length
+              ? veyra.captureConnectedSummary + "\n" + veyra.captureInputColorText
+                + "\n" + qsTr("Measured delivery: %1 fps. Capture rate is not game-engine FPS.").arg(veyra.captureFps.toFixed(2))
+              : qsTr("Not connected. The settings below apply to the next connection.")
+        color: Theme.t2; font.family: Theme.fontUi; font.pixelSize: 12
+    }
+    DialogSection { text: qsTr("Next connection — requested settings") }
+    Text {
+        objectName: "capture-requested-details"
+        Layout.fillWidth: true
+        wrapMode: Text.Wrap
+        text: (veyra.captureFormatLabel || qsTr("Select a resolution, capture rate and pixel format."))
+              + (veyra.captureRequestedFps > 0 ? "\n" + qsTr("Explicit device-rate override: %1 fps").arg(veyra.captureRequestedFps) : "")
+        color: Theme.t2; font.family: Theme.fontUi; font.pixelSize: 12
+    }
     DialogGroup {
         VRow {
             label: qsTr("视频输入设备")
@@ -175,12 +195,12 @@ DialogLayer {
             RowLayout {
                 spacing: 6
                 enabled: !veyra.captureQueryBusy && veyra.captureDeviceId.length > 0
-                DialogTextField { id: customCaptureResolution; objectName: "capture-custom-resolution"; implicitWidth: 140; text: "1920x1080" }
-                VButton { text: qsTr("检查并选择"); onClicked: veyra.captureResolutionId = customCaptureResolution.text }
+                DialogTextField { id: customCaptureResolution; objectName: "capture-custom-resolution"; implicitWidth: 140; placeholder: veyra.captureResolutionId || "2560x1440" }
+                VButton { text: qsTr("检查并选择"); enabled: customCaptureResolution.text.trim().length > 0; onClicked: veyra.captureResolutionId = customCaptureResolution.text }
             }
         }
         VRow {
-            label: qsTr("帧率")
+            label: qsTr("Requested capture FPS")
             hint: qsTr("列出离散帧率及驱动范围内的候选；设备帧率填 0 时沿用此选择，连接时验证实际值")
             VSelect {
                 objectName: "capture-frame-rate"
@@ -276,7 +296,7 @@ DialogLayer {
             }
         }
         VRow {
-            label: qsTr("设备帧率 FPS")
+            label: qsTr("Device FPS override")
             hint: qsTr("0 = 沿用所选格式；设备返回其他帧率会报错，不在软件中偷偷丢帧")
             DialogTextField {
                 objectName: "capture-fps"
@@ -295,6 +315,11 @@ DialogLayer {
     }
     DialogSection { text: qsTr("音频") }
     DialogGroup {
+        VRow {
+            label: qsTr("Audio sync and output")
+            hint: qsTr("Adjust audio delay without changing capture or frame generation.")
+            VButton { text: qsTr("Audio settings…"); onClicked: dialogHost.open("audio") }
+        }
         VRow {
             label: qsTr("音频监听")
             hint: qsTr("只连接明确选中的输入，默认不监听")

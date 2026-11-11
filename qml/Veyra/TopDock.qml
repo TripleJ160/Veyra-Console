@@ -25,7 +25,7 @@ Item {
     signal requestMinimize()
     signal requestMaximize()
     signal requestClose()
-    signal requestMove()
+    signal requestMove(int modifiers)
     // The cinema pill's eye: shown on 极简 and in fullscreen, toggles the pill.
     property bool pillToggleVisible: false
     property bool pillHidden: false
@@ -57,7 +57,19 @@ Item {
         // Leaving the zone for anywhere but the dock retracts it (closeDock).
         HoverHandler { onHoveredChanged: if (hovered) dockRoot.open(); else if (!barHover.hovered) retract.restart() }
         // The top strip is the title bar: drag moves, double click maximizes.
-        DragHandler { target: null; onActiveChanged: if (active) dockRoot.requestMove() }
+        // Decide at event acceptance, before the native drag releases Qt's grab.
+        DragHandler {
+            objectName: "dock-strip-move-shift"
+            target: null
+            acceptedModifiers: Qt.ShiftModifier
+            onActiveChanged: if (active) dockRoot.requestMove(Qt.ShiftModifier)
+        }
+        DragHandler {
+            objectName: "dock-strip-move"
+            target: null
+            acceptedModifiers: Qt.NoModifier
+            onActiveChanged: if (active) dockRoot.requestMove(Qt.NoModifier)
+        }
         TapHandler { onDoubleTapped: dockRoot.requestMaximize() }
     }
     Rectangle {
@@ -113,7 +125,14 @@ Item {
         DragHandler {
             objectName: "dock-move"
             target: null
-            onActiveChanged: if (active) dockRoot.requestMove()
+            acceptedModifiers: Qt.NoModifier
+            onActiveChanged: if (active) dockRoot.requestMove(Qt.NoModifier)
+        }
+        DragHandler {
+            objectName: "dock-move-shift"
+            target: null
+            acceptedModifiers: Qt.ShiftModifier
+            onActiveChanged: if (active) dockRoot.requestMove(Qt.ShiftModifier)
         }
 
         RowLayout {

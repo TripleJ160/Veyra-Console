@@ -14,6 +14,7 @@ import QtQuick.Layouts
 VPage {
     id: root
     signal requestPage(string page)
+    signal requestDialog(string key)
 
     property string section: "look"
     // The shortcut row waiting for a new key ("" = none).
@@ -274,6 +275,15 @@ VPage {
                     }
                     VGroup {
                         VRow {
+                            label: "Show Windows title bar — supports FancyZones"
+                            hint: "F11 toggles fullscreen. F10 opens Settings in either window style."
+                            VSwitch {
+                                objectName: "set-system-title-bar"
+                                checked: veyra.preferences.systemTitleBar === true
+                                onToggled: value => veyra.setPreference("systemTitleBar", value)
+                            }
+                        }
+                        VRow {
                             label: qsTr("打开时的默认页面")
                             hint: qsTr("首页 = 选择片源的页面（点顶部 Logo 也能回到这里）")
                             VSeg {
@@ -341,6 +351,45 @@ VPage {
                         wrapMode: Text.WordWrap
                     }
                     VGroup {
+                        VRow {
+                            label: "Viewing preset"
+                            hint: "Motion delivery only. Image look, capture, audio and window settings are preserved."
+                            VSelect {
+                                objectName: "set-viewing-preset"
+                                implicitWidth: 230
+                                options: veyra.presets.filter(p => p.viewing).map(p => ({id: String(p.index), label: p.name, note: p.note}))
+                                value: veyra.currentPresetName
+                                onPicked: id => { veyra.nodeMode = 0; veyra.applyPresetIndex(Number(id)) }
+                            }
+                        }
+                        VRow {
+                            label: "Image enhancement / NR look"
+                            hint: "One layer before FG. Comparison starting points, not quality rankings. SF B is separate from FG Performance/Lite."
+                            VSelect {
+                                objectName: "set-nr-look"
+                                implicitWidth: 230
+                                options: veyra.nrLooks.map(p => ({id: String(p.index), label: p.name, note: p.available ? p.note : p.reason}))
+                                value: veyra.currentNrLookName
+                                onPicked: id => veyra.applyNrLookIndex(Number(id))
+                            }
+                        }
+                        Text {
+                            Layout.fillWidth: true; wrapMode: Text.Wrap
+                            text: (veyra.protectionEnabled ? "NR protection regions ON" : "NR protection regions OFF") +
+                                  ". Regions are retained when switching looks; they protect NR, not subsequent FG. For art-style retention, start with Subtle (25% correction). Adjust Total in the NR controls for a custom blend."
+                            color: Theme.t2; font.family: Theme.fontUi; font.pixelSize: Theme.fsBody
+                        }
+                        VButton {
+                            objectName: "set-playback-info"
+                            text: "Playback information"
+                            onClicked: root.requestDialog("console-profile")
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: "30→60 — conditional: Doubles retained-picture cadence. Does not enforce 60 fps or automatically disable FG for 60 fps content. Other viewing presets use transport timing."
+                            color: Theme.t2; font.family: Theme.fontUi; font.pixelSize: Theme.fsBody
+                        }
                         VRow {
                             label: qsTr("解码")
                             hint: (veyra.preferences.decode || "auto") === "hardware"

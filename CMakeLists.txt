@@ -4,7 +4,7 @@ project(veyra VERSION 2.1.5 LANGUAGES C CXX RC)
 # Moonlight/Xbox have C sources independently of the optional PS5 backend.
 # Shown in the EXE's version resource and in the package name. CMake versions
 # must be numeric, so the beta marker lives here instead.
-set(VEYRA_DISPLAY_VERSION "2.1.5" CACHE STRING "Human-readable version string")
+set(VEYRA_DISPLAY_VERSION "2.1.5-console.1" CACHE STRING "Human-readable version string")
 # The cache keeps the first value it ever saw, so a release that bumps
 # project(VERSION) used to ship an EXE still stamped with the previous display
 # string. Re-align it whenever the cached label does not start with the project
@@ -92,6 +92,7 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(veyra_base STATIC
   src/base/Log.cpp
+  src/base/HostWaitTrace.cpp
   src/base/NgxResult.cpp
   src/base/FileIdentity.cpp
   src/base/RuntimePaths.cpp
@@ -107,7 +108,7 @@ target_compile_features(veyra_base PUBLIC cxx_std_20)
 target_compile_definitions(veyra_base PUBLIC
   UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_include_directories(veyra_base PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(veyra_base PUBLIC bcrypt wintrust crypt32 version)
+target_link_libraries(veyra_base PUBLIC bcrypt wintrust crypt32 version advapi32)
 
 add_library(veyra_gfx STATIC
   src/gfx/GpuSchedulingPriority.cpp
@@ -766,6 +767,10 @@ if(VEYRA_FFMPEG_ROOT AND EXISTS "${VEYRA_FFMPEG_ROOT}/include/libavformat/avform
   target_link_libraries(veyra_source_tests PRIVATE veyra_sources)
 
   add_executable(veyra_capture_tests tests/integration/CaptureSourceTests.cpp)
+  add_executable(veyra_console_profile tools/console_profile/main.cpp)
+  target_link_libraries(veyra_console_profile PRIVATE veyra_engine)
+  target_include_directories(veyra_console_profile PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_options(veyra_console_profile PRIVATE /STACK:8388608)
   add_executable(veyra_network_interlace_tests tests/integration/NetworkInterlaceTests.cpp)
   target_compile_features(veyra_network_interlace_tests PRIVATE cxx_std_20)
   target_compile_definitions(veyra_network_interlace_tests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -792,6 +797,8 @@ if(VEYRA_FFMPEG_ROOT AND EXISTS "${VEYRA_FFMPEG_ROOT}/include/libavformat/avform
   target_link_libraries(veyra_capture_tests PRIVATE veyra_sources)
 
   add_executable(veyra_live_timing_tests tests/unit/LivePresentationTimingTests.cpp)
+  add_executable(veyra_host_wait_probe tests/integration/HostWaitProbe.cpp)
+  target_link_libraries(veyra_host_wait_probe PRIVATE veyra_base)
   add_executable(veyra_control_paint_tests tests/integration/ControlPaintTests.cpp)
   target_compile_features(veyra_control_paint_tests PRIVATE cxx_std_20)
   target_compile_definitions(veyra_control_paint_tests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -861,6 +868,10 @@ if(VEYRA_FFMPEG_ROOT AND EXISTS "${VEYRA_FFMPEG_ROOT}/include/libavformat/avform
   target_compile_definitions(veyra_capture_format_selection_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
   target_link_libraries(veyra_capture_format_selection_tests PRIVATE ole32 strmiids)
   add_executable(veyra_presentation_worker_tests tests/unit/LiveGpuSchedulerTests.cpp)
+  add_executable(veyra_rejected_pair_tests tests/unit/RejectedPairSchedulingTests.cpp)
+  target_compile_features(veyra_rejected_pair_tests PRIVATE cxx_std_20)
+  target_compile_definitions(veyra_rejected_pair_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_include_directories(veyra_rejected_pair_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   add_executable(veyra_async_display_query_tests tests/unit/AsyncDisplayQueryTests.cpp)
   target_compile_features(veyra_async_display_query_tests PRIVATE cxx_std_20)
   target_compile_definitions(veyra_async_display_query_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
@@ -1209,6 +1220,9 @@ if(VEYRA_BUILD_QML_UI AND Qt6_FOUND)
   # piece of the old shell worth keeping, and its own dialog is what users
   # expect from a desktop app. No QWidget UI is created.
   target_link_libraries(veyra_qml_bridge PUBLIC veyra_engine Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Widgets PRIVATE shell32)
+  add_executable(veyra_console_preset_probe tests/integration/ConsolePresetBridgeProbe.cpp)
+  target_link_libraries(veyra_console_preset_probe PRIVATE veyra_qml_bridge)
+  target_link_options(veyra_console_preset_probe PRIVATE /STACK:33554432)
   add_executable(veyra_playlist_tests tests/unit/PlaylistModelTests.cpp src/ui/PlaylistModel.cpp include/veyra/ui/PlaylistModel.h)
   set_target_properties(veyra_playlist_tests PROPERTIES AUTOMOC ON)
   target_compile_features(veyra_playlist_tests PRIVATE cxx_std_20)
@@ -1516,6 +1530,10 @@ add_executable(veyra_sr_reconstruction_tests tests/integration/SrReconstructionT
   target_compile_features(veyra_video_ai_export_probe PRIVATE cxx_std_20)
   target_compile_options(veyra_video_ai_export_probe PRIVATE /utf-8)
   target_link_libraries(veyra_video_ai_export_probe PRIVATE veyra_engine)
+  add_executable(veyra_recorded_pair_probe tests/integration/RecordedPairProbe.cpp)
+  target_compile_features(veyra_recorded_pair_probe PRIVATE cxx_std_20)
+  target_compile_options(veyra_recorded_pair_probe PRIVATE /utf-8)
+  target_link_libraries(veyra_recorded_pair_probe PRIVATE veyra_engine)
   add_executable(veyra_preset_library_tests tests/unit/PresetLibraryTests.cpp src/engine/PresetLibrary.cpp src/engine/EffectChain.cpp)
 target_link_options(veyra_preset_library_tests PRIVATE /STACK:33554432) # Preset apply recurses over 21 KB ChainConfiguration frames; the default 1 MB stack is too close to the edge.
 add_executable(veyra_hdr_tuning_tests tests/unit/HdrOutputTuningTests.cpp src/engine/PresetLibrary.cpp src/engine/EffectChain.cpp)
@@ -1811,14 +1829,18 @@ if(TARGET veyra_qml_ui)
 endif()
 configure_file(apps/veyra/resource.h ${CMAKE_CURRENT_BINARY_DIR}/veyra-resource.h COPYONLY)
 configure_file(assets/veyra.ico ${CMAKE_CURRENT_BINARY_DIR}/veyra.ico COPYONLY)
-target_sources(veyra PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/veyra-version.rc)
+if(TARGET veyra)
+  target_sources(veyra PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/veyra-version.rc)
+endif()
 set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/veyra-version.rc PROPERTIES
   OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/veyra.ico;${CMAKE_CURRENT_SOURCE_DIR}/apps/veyra/resource.h")
 if(TARGET veyra_qml_ui)
   set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/veyra-qml-version.rc PROPERTIES
     OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/veyra.ico;${CMAKE_CURRENT_SOURCE_DIR}/apps/veyra/resource.h")
 endif()
-target_link_options(veyra PRIVATE "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/apps/veyra/veyra.manifest")
+if(TARGET veyra)
+  target_link_options(veyra PRIVATE "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/apps/veyra/veyra.manifest")
+endif()
 # P4-c: the QML front end hosts the same layered child subtitle window.
 if(TARGET veyra_qml_ui)
   # Copied next to the link step and named relatively: a short link line keeps

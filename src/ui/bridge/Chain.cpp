@@ -268,6 +268,7 @@ QVariantList QmlPlayerBridge::presets() const {
         item["name"] = utf8Of(e.name);
         item["note"] = uiText(e.note);
         item["builtin"] = e.builtin;
+        item["viewing"] = engine::PresetLibrary::isViewing(e);
         item["nodeMode"] = e.kind == engine::ChainMode::Node;
         item["contents"] = int(e.contents);
         out << item;
@@ -280,9 +281,65 @@ QString QmlPlayerBridge::currentPresetName() const {
     // showing; anything else is honestly "自定义" rather than the nearest guess.
     const auto& entries = impl_->facade.presets().entries();
     for (const auto& e : entries) {
-        if (e.chain == impl_->chain) return utf8Of(e.name);
+        if (e.kind == impl_->chain.mode && (engine::PresetLibrary::isViewing(e) || e.chain == impl_->chain) &&
+            engine::PresetLibrary::matchesSettings(e, settings())) return utf8Of(e.name);
     }
     return tr("自定义");
+}
+
+QVariantList QmlPlayerBridge::processingChain(bool stillImage, bool nrFirst) const {
+    const auto stored = chain();
+    if (impl_->chain.mode != engine::ChainMode::List) return stored;
+    bool nrActive = false;
+    for (uint32_t i = 0; i < impl_->chain.nodeCount; ++i)
+        nrActive |= impl_->chain.nodes[i].type == engine::EffectType::NrEnhance && impl_->chain.nodes[i].enabled;
+    const auto order = engine::listEffectOrder(nrActive, nrActive && nrFirst && !stillImage);
+    QVariantList displayed;
+    for (const auto type : order) for (const auto& item : stored) {
+        const auto index = item.toMap().value("index").toUInt();
+        if (impl_->chain.nodes[index].type == type) displayed << item;
+    }
+    return displayed; // Stable editor indices: clicking a reordered chip still selects its original node.
+}
+
+QVariantList QmlPlayerBridge::nrLooks() const {
+    QVariantList out;
+    const auto& looks = engine::PresetLibrary::nrLooks();
+    for (size_t i = 0; i < looks.size(); ++i) {
+        const auto& look = looks[i];
+        const auto cap = effectCapabilities().value("nr" + QString::number(int(look.nr.runtime))).toMap();
+        const bool available = impl_->chain.mode == engine::ChainMode::List && (!look.enabled || cap.value("available").toBool());
+        out << QVariantMap{{"index", int(i)}, {"name", utf8Of(look.name)}, {"note", utf8Of(look.note)},
+            {"available", available}, {"reason", impl_->chain.mode != engine::ChainMode::List ? QStringLiteral("Use List mode; node graphs are preserved") : cap.value("reason").toString()}};
+    }
+    return out;
+}
+
+QString QmlPlayerBridge::currentNrLookName() const {
+    const int index = engine::PresetLibrary::matchingNrLook(impl_->chain, settings());
+    return index < 0 ? QStringLiteral("Custom") : utf8Of(engine::PresetLibrary::nrLooks()[size_t(index)].name);
+}
+
+bool QmlPlayerBridge::applyNrLookIndex(int index) {
+    if (index < 0 || size_t(index) >= engine::PresetLibrary::nrLooks().size()) return false;
+    const auto choice = nrLooks().at(index).toMap();
+    if (!choice.value("available").toBool()) { emit notice(choice.value("reason").toString(), true); return false; }
+    const auto previous = impl_->facade.pendingSettings();
+    const auto oldChain = impl_->chain;
+    auto candidate = oldChain; auto next = previous;
+    const auto validation = engine::PresetLibrary::applyNrLook(size_t(index), candidate, next);
+    if (!validation.accepted) { emit notice(uiText(validation.message), true); return false; }
+    impl_->chain = candidate; impl_->facade.setPending(next);
+    if (!impl_->revalidate(true, &previous)) {
+        const auto error = impl_->validation.message;
+        impl_->chain = oldChain; impl_->facade.setPending(previous); impl_->revalidate();
+        emit notice(uiText(error), true); return false;
+    }
+    impl_->selectedNr = -1;
+    impl_->prefs[QStringLiteral("nrHoldStrength")] = double(next.nrHoldStrength);
+    impl_->prefs[QStringLiteral("nrReuse")] = int(next.nrReuse);
+    if (!impl_->savePrefs()) veyra::log::warn("ui-prefs", "NR look preferences not saved");
+    emit settingsChanged(); emitChainChanged(); return true;
 }
 
 QVariantList QmlPlayerBridge::audioTracks() const {
@@ -865,6 +922,11 @@ bool QmlPlayerBridge::applyPresetIndex(int index) {
     impl_->selectedColour = selectedColour;
     if (entry.flow && (entry.contents & engine::presetContentMask(engine::PresetContent::Flow))) {
         impl_->prefs[QStringLiteral("contentRate")] = int(this->settings().content);
+        if (engine::PresetLibrary::isViewing(entry)) {
+            impl_->prefs[QStringLiteral("dlssgPerformance")] = false;
+            impl_->prefs[QStringLiteral("vfgAutoRegulate")] = false;
+            impl_->prefs[QStringLiteral("edgeAegis")] = true;
+        }
         if (!impl_->savePrefs()) veyra::log::warn("ui-prefs", "preset content cadence not saved");
     }
     emit settingsChanged();

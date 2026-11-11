@@ -11,6 +11,7 @@
 // window to match. That keeps the layout in QML (where it belongs) and the
 // pixels in D3D12 (where the latency budget lives).
 #include <QApplication>
+#include "veyra/diagnostics/HostWaitTrace.h"
 #include <QProcess>
 #include <QIcon>
 #include <QImage>
@@ -808,6 +809,8 @@ static int runApplication(int argc, char** argv, QString& restartProgram, QStrin
         } else if (a == QLatin1String("--export-out") && hasValue) {
             // A review run's export target, so a real export starts without the dialog.
             bridge.setExportPath(args.at(++i));
+        } else if (a == QLatin1String("--fullscreen")) {
+            testOptions.insert(QStringLiteral("startFullscreen"), true);
         } else if (a == QLatin1String("--full-bar") && hasValue) {
             testOptions.insert(QStringLiteral("fullBar"), args.at(++i));
         } else if (a == QLatin1String("--full-debug")) {
@@ -1138,6 +1141,9 @@ static int runApplication(int argc, char** argv, QString& restartProgram, QStrin
 }
 
 int main(int argc, char** argv) {
+    veyra::diagnostics::HostWaitSession hostWaitSession;
+    if (hostWaitSession.status())
+        veyra::log::warn("host-wait-trace", std::format("ETW registration failed error={}", hostWaitSession.status()));
     // A child for the AMD HIP self-test (AmdHipPreflight.h): no Qt, no window and
     // no player state, only the HIP calls and their result lines on the pipe.
     if (argc >= 2 && std::strcmp(argv[1], "--amd-hip-preflight") == 0) {

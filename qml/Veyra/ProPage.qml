@@ -418,6 +418,15 @@ VPage {
                 }
             }
             VButton {
+                id: nrLookButton
+                objectName: "pro-nr-look"
+                iconName: "sparkles"
+                trailingIcon: "down"
+                text: veyra.currentNrLookName
+                maxTextWidth: 165
+                onClicked: nrLookMenu.openAt(this, "down")
+            }
+            VButton {
                 id: presetBtn
                 iconName: "layers"
                 trailingIcon: "down"
@@ -1228,7 +1237,11 @@ VPage {
                             }
                         }
                         Repeater {
-                            model: veyra.chain
+                            model: {
+                                // Read the chain to track structural / enabled changes as well as source mode.
+                                const stored = veyra.chain
+                                return stored.length ? veyra.processingChain(veyra.isImage, veyra.lowLatency) : []
+                            }
                             delegate: Row {
                                 required property var modelData
                                 spacing: 2
@@ -1293,8 +1306,28 @@ VPage {
                         // The design builds the inspector from accordion cards, not
                         // flat rows: an icon, a title, a live summary line, a switch
                         // and a chevron, with nested groups inside.
-                        // Spatial anti-aliasing (#53) runs at source size right after the
-                        // input conversion, in front of SR, so jaggies are never enlarged.
+                        VRow {
+                            id: nrBlendRow
+                            readonly property var activeLayers: veyra.nrLayers.filter(n => n.enabled)
+                            readonly property var activeNr: activeLayers.length === 1 ? activeLayers[0] : null
+                            visible: activeNr !== null
+                            label: "NR correction blend"
+                            value: activeNr ? Math.round(activeNr.total * 100) + "%" : ""
+                            hint: "0% keeps the base image; 100% applies the full correction. Lower values retain more of the original appearance. This does not reduce inference work."
+                            VSlider {
+                                objectName: "pro-nr-blend"
+                                implicitWidth: 160; from: 0; to: 1; stepSize: .01
+                                inputScale: 100; valueFromModel: true; live: false
+                                value: nrBlendRow.activeNr ? nrBlendRow.activeNr.total : 0
+                                onMoved: amount => { if (nrBlendRow.activeNr) veyra.setNrLayerParameter(nrBlendRow.activeNr.index, "total", amount) }
+                            }
+                        }
+                        // List AA follows active NR/protection; otherwise it precedes SR.
+                        Text {
+                            Layout.fillWidth: true; wrapMode: Text.Wrap
+                            text: veyra.currentNrLookName + " · " + (veyra.protectionEnabled ? "NR protection ON" : "NR protection OFF") + ". Protection does not cover subsequent FG."
+                            color: Theme.t2; font.family: Theme.fontUi; font.pixelSize: 11
+                        }
                         VAccordion {
                             objectName: "list-anti-alias"
                             Layout.fillWidth: true
@@ -1948,6 +1981,7 @@ VPage {
     function openTestMenu(name) {
         if (name === "source") sourceMenu.openAt(sourceBtn, "down")
         else if (name === "preset") presetMenu.openAt(presetBtn, "down")
+        else if (name === "nr-look") nrLookMenu.openAt(nrLookButton, "down")
     }
     readonly property real testMenuScale: sourceMenu.motionScale
 
@@ -2008,6 +2042,14 @@ VPage {
         }
     }
     // The design puts 另存为 / 管理 in the professional page's preset menu.
+    VMenu {
+        id: nrLookMenu
+        title: "Image enhancement / NR look"
+        items: veyra.nrLooks.map(p => ({label: p.name, note: p.available ? p.note : p.reason,
+            disabled: !p.available, checked: p.name === veyra.currentNrLookName, look: p.index}))
+            .concat([{head: veyra.protectionEnabled ? "NR protection ON · does not protect FG" : "NR protection OFF · regions retained"}])
+        onPicked: (i, o) => veyra.applyNrLookIndex(o.look)
+    }
     // presets.js VY.presetMenu(app, anchor, 'list').
     VMenu {
         id: presetMenu

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WindowsPerformanceRecorder Version="1.0" Author="Veyra private research">
+  <Profiles>
+    <SystemCollector Id="HostCpu" Name="Veyra CPU waits">
+      <BufferSize Value="1024"/>
+      <Buffers Value="256"/>
+    </SystemCollector>
+    <EventCollector Id="HostEvents" Name="Veyra slow host operations">
+      <BufferSize Value="64"/>
+      <Buffers Value="64"/>
+    </EventCollector>
+    <SystemProvider Id="HostSystem">
+      <Keywords>
+        <Keyword Value="CpuConfig"/>
+        <Keyword Value="ProcessThread"/>
+        <Keyword Value="Loader"/>
+        <Keyword Value="CSwitch"/>
+        <Keyword Value="ReadyThread"/>
+        <Keyword Value="SampledProfile"/>
+      </Keywords>
+      <Stacks>
+        <Stack Value="CSwitch"/>
+        <Stack Value="ReadyThread"/>
+        <Stack Value="SampledProfile"/>
+      </Stacks>
+    </SystemProvider>
+    <EventProvider Id="HostWait" Name="4afbb638-7834-4f9c-a7ab-8f642e71a905" Level="5">
+      <Keywords><Keyword Value="0x1"/></Keywords>
+    </EventProvider>
+    <Profile Id="HostWaits.Verbose.Memory" Name="HostWaits" Description="Bounded slow query, logger and CPU scheduling diagnosis" LoggingMode="Memory" DetailLevel="Verbose">
+      <Collectors>
+        <SystemCollectorId Value="HostCpu"><SystemProviderId Value="HostSystem"/></SystemCollectorId>
+        <EventCollectorId Value="HostEvents"><EventProviders><EventProviderId Value="HostWait"/></EventProviders></EventCollectorId>
+      </Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

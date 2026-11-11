@@ -22,9 +22,13 @@ Item {
         property int thumbnailGeneration: 0
         property string sourceName: "Seek fixture"
         property string sourceSummary: ""
+        property var preferences: ({})
         property string positionText: "0:30"
         property string durationText: "1:40"
         property string currentPresetName: ""
+        property string currentNrLookName: "NR off / Reference"
+        property var nrLooks: []
+        property bool protectionEnabled: false
         property int subtitlePrimary: -1
         property int selectedAudioTrack: -1
         property var presets: []
@@ -38,6 +42,7 @@ Item {
     }
     CineBar { id: bar; x: 50; y: 220; width: 860; height: 92 }
     SignalSpy { id: moveSpy; target: bar; signalName: "requestMove" }
+    SignalSpy { id: dialogSpy; target: bar; signalName: "requestDialog" }
     TestCase {
         name: "CinemaSeek"
         when: windowShown
@@ -46,8 +51,32 @@ Item {
             root.Window.window.height = 650
             root.Window.window.requestActivate()
             veyra.seeks = []; veyra.duration = 100; veyra.isCapture = false
+            veyra.preferences = ({})
+            dialogSpy.clear()
             bar.fullscreen = true
             moveSpy.clear()
+        }
+        function test_optional_profile_status_entry() {
+            const info = findChild(bar, "cine-profile-info")
+            verify(info !== null)
+            compare(info.visible, true)
+            for (const profile of ["FAITHFUL60", "ORIGINALS"]) {
+                veyra.preferences = ({privateConsoleProfile: profile, privateProfileLabel: profile})
+                compare(info.visible, true)
+                mouseClick(info)
+                compare(dialogSpy.signalArguments[dialogSpy.count - 1][0], "console-profile")
+            }
+        }
+        function test_long_viewing_name_keeps_controls_inside() {
+            veyra.currentPresetName = "30→60 — conditional"
+            veyra.currentNrLookName = "NR NVIDIA-original comparison"
+            for (const name of ["cine-profile-info", "cine-rotate", "cine-fullscreen", "cine-hide"]) {
+                const control = findChild(bar, name)
+                verify(control !== null && control.visible)
+                const pos = control.mapToItem(bar, 0, 0)
+                verify(pos.x >= 0 && pos.x + control.width <= bar.width, name + " clipped")
+            }
+            veyra.currentPresetName = ""
         }
         function test_scrub_data() {
             return [{tag:"fullscreen",full:true},{tag:"windowed",full:false}]

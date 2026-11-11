@@ -37,7 +37,14 @@ Item {
         DragHandler {
             target: null
             enabled: page.shell !== null && !page.shell.fullscreen && !page.shell.maximized
-            onActiveChanged: if (active) page.shell.startSystemMove()
+            acceptedModifiers: Qt.NoModifier
+            onActiveChanged: if (active) page.shell.beginWindowMove(Qt.NoModifier)
+        }
+        DragHandler {
+            target: null
+            enabled: page.shell !== null && !page.shell.fullscreen && !page.shell.maximized
+            acceptedModifiers: Qt.ShiftModifier
+            onActiveChanged: if (active) page.shell.beginWindowMove(Qt.ShiftModifier)
         }
         TapHandler {
             enabled: page.shell !== null && !page.shell.fullscreen

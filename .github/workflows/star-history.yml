@@ -1,12 +1,7 @@
 name: Generate Star History
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/star-history.yml"
-  schedule:
-    - cron: "0 0 * * 0"
+  # Fork publication does not authorize scheduled commits.
   workflow_dispatch:
 
 permissions:

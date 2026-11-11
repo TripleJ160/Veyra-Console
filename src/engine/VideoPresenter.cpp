@@ -4,6 +4,7 @@
 #include "veyra/gfx/D3D12DeviceContext.h"
 #include "veyra/gfx/CommandSlotRing.h"
 #include "veyra/sink/ImageExportSink.h"
+#include "veyra/diagnostics/HostWaitTrace.h"
 namespace veyra::engine {
 bool VideoPresenter::beginSourceInput(){
     if(!reflexInputFrame_&&reflex_.active())reflexInputFrame_=reflex_.begin();
@@ -160,6 +161,8 @@ bool VideoPresenter::refresh(ID3D12Device* device){
     return true;
 }
 bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& sharedRing,pipeline::EnhanceGraph& graph,unsigned slot,bool generated,bool referencesValid,int comparison,bool baseReference,float split,pipeline::FrameIdentity identity,PreviewView view,int64_t sourcePts100ns,bool retainUnchanged) {
+    diagnostics::HostWaitContext hostIdentity({identity.sourceFrameId, identity.epoch, identity.settingsRevision});
+    diagnostics::HostWaitSpan hostPresent("presenter", "presentIncludingDiagnostics");
     const auto reflexFrame=reflexFrame_;reflexFrame_=0;
     auto& ring=presentationQueue_?presentationRing_:sharedRing;
     auto* fence=presentationFence_?presentationFence_.Get():ctx.fence();
@@ -442,18 +445,19 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
     const auto presentEnd=std::chrono::steady_clock::now();
     const auto ms=[](auto d){return std::chrono::duration<double,std::milli>(d).count();};
     const bool slow=ms(presentEnd-presentStart)>=80.0;
-    if(slow||presentEnd>=nextCostLog_){
+    if(slow||(log::playbackDiagnostics()&&presentEnd>=nextCostLog_)){
         nextCostLog_=presentEnd+std::chrono::seconds(1);
         // Display-side sample (F4, review 2026-09-22): which submissions the
         // display actually scanned out. This is still not a photon measurement.
-        static const bool displayStats=GetEnvironmentVariableW(L"VEYRA_TEST_NO_DISPLAY_STATS",nullptr,0)==0;
+        static const bool displayStats=log::playbackDiagnostics()&&GetEnvironmentVariableW(L"VEYRA_TEST_NO_DISPLAY_STATS",nullptr,0)==0;
         const auto stats=displayStats?sink_.sampleFrameStatistics():gfx::PresentSink::FrameStatisticsDelta{};
         if(stats.supported)veyra::log::info("display-stats",std::format("refreshHz={:.3f} presentCalls={} dxgiPresentCount={} refreshes={} presentRefreshDelta={} presentsAhead={} backend={} (DXGI GetFrameStatistics delta over ~1s. These counters CANNOT tell how many frames the panel actually showed: with vsync off and tearing allowed, dxgiPresentCount tracks completed Present calls, and both refresh counters just advance with the monitor. presentsAhead = submitted presents after the last shown one at the sample: the display queue under VSync; with Automatic Present(0,0) it includes frames a newer one replaces; -1 unavailable. Measuring scanout needs PresentMon. XeSS generated presents are provider-internal.)",sink_.displayRefreshHz(),stats.presents,stats.displayed,stats.refreshes,stats.displayedRefresh,stats.ahead,sink_.xess()?"XeSS":"DXGI"));
         else if(FAILED(stats.result))veyra::log::info("display-stats",std::format("unavailable hr=0x{:X} backend={}",unsigned(stats.result),sink_.xess()?"XeSS":"DXGI"));
         const auto scanout=displayStats?sink_.takeDisplayLatency():gfx::PresentSink::DisplayLatencySummary{};
         if(scanout.samples||scanout.compositionMode>=0)veyra::log::info("display-latency",std::format("presentToScanoutP50Ms={:.3f} presentToScanoutP95Ms={:.3f} presentToScanoutMaxMs={:.3f} samples={} replacedAtLeast={} compositionMode={} refreshHz={:.3f} (DXGI frame statistics: Present call to the vblank that showed it, VSync and Automatic DXGI presents; Automatic dates only frames named as shown; compositionMode 0 composed 1 overlay 2 none 3 failure -1 unknown; not a photon measurement)",scanout.p50Ms,scanout.p95Ms,scanout.maxMs,scanout.samples,scanout.replacedAtLeast,scanout.compositionMode,sink_.displayRefreshHz()));
         const auto& timing=sink_.lastPresentTiming();
-        veyra::log::info("present-cost",std::format("generated={} totalMs={:.3f} recordSubmitMs={:.3f} slotWaitMs={:.3f} dxgiMs={:.3f} slow={} source={} epoch={} backend={} resized={} resizeMs={:.3f} beginMs={:.3f} commandsMs={:.3f} beforeMs={:.3f} presentCallMs={:.3f} bufferMs={:.3f} afterMs={:.3f} hr=0x{:X}",generated,
+        // Keep unusually slow Presents visible even when periodic diagnostics are off.
+        veyra::Logger::instance().write(slow?veyra::LogLevel::Warn:veyra::LogLevel::Info,"present-cost",std::format("generated={} totalMs={:.3f} recordSubmitMs={:.3f} slotWaitMs={:.3f} dxgiMs={:.3f} slow={} source={} epoch={} backend={} resized={} resizeMs={:.3f} beginMs={:.3f} commandsMs={:.3f} beforeMs={:.3f} presentCallMs={:.3f} bufferMs={:.3f} afterMs={:.3f} hr=0x{:X}",generated,
             std::chrono::duration<double,std::milli>(presentEnd-presentStart).count(),
             std::chrono::duration<double,std::milli>(dxgiStart-presentStart).count(),ring.cpuWaitMilliseconds()-slotWaitStart,
             ms(presentEnd-dxgiStart),slow,identity.sourceFrameId,identity.epoch,sink_.xess()?"XeSS":"DXGI",resized,

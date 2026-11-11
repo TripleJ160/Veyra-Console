@@ -95,6 +95,111 @@ void PresetLibrary::addBuiltins() {
     add(L"极致", L"超分 4K · NR 1 层 · HDR · 补帧 2X", ChainMode::List, true, true, 2, true, false);
 }
 
+bool PresetLibrary::isViewing(const PresetEntry& e) {
+    return e.builtin && (e.name == L"Originals" || e.name == L"30→60 — conditional" ||
+        e.name == L"DLSS 2× — transport" || e.name == L"VFG Medium 2×");
+}
+
+void PresetLibrary::addViewingBuiltins() {
+    std::erase_if(entries_, [](const auto& e) { return isViewing(e); });
+    const wchar_t* names[] = {L"Originals", L"30→60 — conditional", L"DLSS 2× — transport", L"VFG Medium 2×"};
+    const wchar_t* notes[] = {
+        L"Transport timing; duplicate removal off; frame generation off.",
+        L"Doubles retained-picture cadence. Does not enforce 60 fps or automatically disable FG for 60 fps content.",
+        L"Transport timing; standard DLSS 2×; Performance/Lite off.",
+        L"Transport timing; VFG Medium 2×; automatic quality regulation off."};
+    std::vector<PresetEntry> viewing;
+    for (unsigned i = 0; i != 4; ++i) {
+        PresetEntry e;
+        e.name = names[i]; e.note = notes[i]; e.builtin = true;
+        e.contents = presetContentMask(PresetContent::FrameGeneration) | presetContentMask(PresetContent::Flow);
+        EnhancementSettings s;
+        s.multiplier = i == 0 ? 1 : 2;
+        s.frameGenerationBackend = i == 3 ? FrameGenerationBackend::Vfg : FrameGenerationBackend::Dlss;
+        s.fgMotion = MotionSource::OpticalFlow;
+        s.content = i == 1 ? ContentRate::Auto : ContentRate::Transport;
+        e.chain = toChain(s); e.color = s.color;
+        e.fg = {s.multiplier, s.frameGenerationBackend, 1};
+        e.globals = ChainGlobalSettings::capture(s);
+        e.flow = PresetFlowSettings::capture(s);
+        viewing.push_back(std::move(e));
+    }
+    entries_.insert(entries_.begin(), viewing.begin(), viewing.end());
+}
+
+const std::vector<NrLook>& PresetLibrary::nrLooks() {
+    static const auto looks = [] {
+        std::vector<NrLook> result;
+        const wchar_t* names[] = {L"NR off / Reference", L"NR Subtle", L"NR Balanced", L"NR Full effect",
+            L"NR Legacy comparison", L"NR NVIDIA-original comparison", L"NR Reduced workload"};
+        const wchar_t* notes[] = {L"NR disabled. Other effects remain unchanged.",
+            L"SF B · 1440p · 25% correction", L"SF B · 1440p · 50% correction",
+            L"SF B · 1440p · 100% correction; not a fidelity ranking",
+            L"SF A · 1440p · 50% correction", L"NVIDIA-original · 1440p · 50% correction",
+            L"SF B · 1080p · 25% correction; latency benefit not measured"};
+        for (unsigned i = 0; i < 7; ++i) {
+            NrLook look; look.name = names[i]; look.note = notes[i]; look.enabled = i != 0;
+            look.nr.runtime = i == 5 ? NrRuntime::NvidiaOriginal : NrRuntime::Ampere;
+            look.nr.model.performance = i != 4 && i != 5;
+            look.nr.sizePolicy = i == 6 ? pipeline::NrSizePolicy::Realtime : pipeline::NrSizePolicy::P1440;
+            look.nr.residual.total = i == 1 || i == 6 ? 0.25f : i == 3 ? 1.0f : 0.5f;
+            result.push_back(look);
+        }
+        return result;
+    }();
+    return looks;
+}
+
+ChainValidation PresetLibrary::applyNrLook(size_t index, EffectChain& chain, EnhancementSettings& settings) {
+    if (index >= nrLooks().size()) return {false, "Unknown NR look"};
+    if (chain.mode != ChainMode::List) return {false, "NR comparison looks require List mode; node graphs are preserved"};
+    auto next = chain; auto values = settings;
+    const auto& look = nrLooks()[index];
+    auto* first = next.firstOf(EffectType::NrEnhance);
+    if (look.enabled && !first) {
+        if (next.nodeCount == kMaxChainNodes) return {false, "No room for an NR layer"};
+        // List execution uses the fixed product order, independent of editor positions.
+        first = &next.nodes[next.nodeCount++]; *first = {}; first->type = EffectType::NrEnhance;
+    }
+    for (uint32_t i = 0; i < next.nodeCount; ++i) {
+        auto& node = next.nodes[i];
+        if (node.type != EffectType::NrEnhance) continue;
+        node.enabled = look.enabled && &node == first;
+        // All layers share one runtime session, including disabled stored layers.
+        if (look.enabled) node.nr.runtime = look.nr.runtime;
+    }
+    if (look.enabled) {
+        first->nr = look.nr;
+        values.nrMotion = MotionSource::OpticalFlow;
+        values.nrHoldStrength = 0; values.nrReuse = NrReuseMode::Off;
+    }
+    if (auto v = validateChain(next); !v.accepted) return v;
+    fromChain(next, values);
+    if (!values.validate().empty()) return {false, "Invalid NR look settings"};
+    chain = next; settings = values; return {};
+}
+
+int PresetLibrary::matchingNrLook(const EffectChain& chain, const EnhancementSettings& s) {
+    if (chain.mode != ChainMode::List) return -1;
+    const ChainNrParams* active = nullptr;
+    for (uint32_t i = 0; i < chain.nodeCount; ++i) {
+        const auto& node = chain.nodes[i];
+        if (node.type != EffectType::NrEnhance || !node.enabled) continue;
+        if (active) return -1;
+        active = &node.nr;
+    }
+    if (!active) return 0;
+    if (s.nrMotion != MotionSource::OpticalFlow || s.nrHoldStrength != 0 || s.nrReuse != NrReuseMode::Off) return -1;
+    for (size_t i = 1; i < nrLooks().size(); ++i) if (*active == nrLooks()[i].nr) return int(i);
+    return -1;
+}
+
+bool PresetLibrary::matchesSettings(const PresetEntry& e, const EnhancementSettings& s) {
+    auto applied = s;
+    apply(e, applied);
+    return applied == s;
+}
+
 bool PresetLibrary::load() {
     error_.clear();
     addBuiltins();
@@ -387,6 +492,12 @@ const std::optional<size_t> PresetLibrary::defaultIndex() const {
 }
 
 void PresetLibrary::apply(const PresetEntry& entry, EnhancementSettings& settings) {
+    if (isViewing(entry)) {
+        // These controls are preferences, not fields in the legacy chain codec.
+        settings.dlssgLite = false;
+        settings.vfgAutoRegulate = false;
+        settings.fgMotionRefine = true;
+    }
     const auto keepFlow = PresetFlowSettings::capture(settings);
     // fromChain() rewrites every stage field, including the ones this preset
     // does not claim (a colour grade travels inside the chain because the

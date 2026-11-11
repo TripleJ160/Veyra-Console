@@ -78,11 +78,24 @@ struct PresetEntry {
     bool operator==(const PresetEntry&) const = default;
 };
 
+struct NrLook {
+    std::wstring name, note;
+    bool enabled = false;
+    ChainNrParams nr{};
+};
+
 class PresetLibrary {
 public:
     explicit PresetLibrary(std::filesystem::path path) : path_(std::move(path)) {}
     // Missing file is not an error: the library starts with the built-ins.
     bool load();
+    // Private console build: recreated after loading, using the normal preset codec.
+    void addViewingBuiltins();
+    static bool isViewing(const PresetEntry&);
+    static bool matchesSettings(const PresetEntry&, const EnhancementSettings&);
+    static const std::vector<NrLook>& nrLooks();
+    static ChainValidation applyNrLook(size_t index, EffectChain&, EnhancementSettings&);
+    static int matchingNrLook(const EffectChain&, const EnhancementSettings&);
     bool save();
     bool put(const PresetEntry& entry, bool replace = false);
     bool rename(size_t index, std::wstring name);

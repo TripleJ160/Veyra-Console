@@ -169,6 +169,19 @@ struct ChainRuntimeOrder {
 std::optional<ChainRuntimeOrder> runtimeOrder(const EffectChain&);
 ChainValidation restoreRuntimeOrder(const EnhancementSettings&, const ChainRuntimeOrder&, EffectChain&);
 
+// The same List ordering drives execution and the UI's processing-order strip.
+// Disabled editor nodes can still be displayed; only enabled nodes execute.
+inline std::array<EffectType, effectTypeCount> listEffectOrder(bool nrActive, bool nrFirst) {
+    return nrFirst
+            ? std::array{EffectType::Color, EffectType::NrEnhance, EffectType::Protection, EffectType::Beauty,
+                EffectType::AntiAliasing, EffectType::SuperResolution, EffectType::VideoHdr, EffectType::FrameGeneration}
+            : nrActive
+            ? std::array{EffectType::Color, EffectType::SuperResolution, EffectType::NrEnhance, EffectType::Protection,
+                EffectType::Beauty, EffectType::AntiAliasing, EffectType::VideoHdr, EffectType::FrameGeneration}
+            : std::array{EffectType::Color, EffectType::AntiAliasing, EffectType::SuperResolution, EffectType::NrEnhance,
+                EffectType::Protection, EffectType::Beauty, EffectType::VideoHdr, EffectType::FrameGeneration};
+}
+
 // CPU-side execution contract, not proof that a GPU executor supports it.
 // Kept separate from EffectChain/EnhancementSettings so compiling a plan does
 // not change their persistent or export-worker shared-memory representation.

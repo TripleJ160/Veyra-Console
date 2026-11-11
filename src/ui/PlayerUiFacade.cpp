@@ -179,6 +179,7 @@ bool PlayerUiFacade::importLegacyStores() {
         // 2.0 ships no built-in presets (user decision 2026-09-29).
         presets_.setIncludeBuiltins(false);
         if (!presets_.load()) { error_ = presets_.error(); return false; }
+        presets_.addViewingBuiltins();
         error_ = presets_.error(); // Successful legacy migration carries an explicit notice.
     }
     // The old files are read-only inputs: they stay on disk untouched so a

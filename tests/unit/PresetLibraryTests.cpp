@@ -1381,6 +1381,62 @@ __declspec(noinline) void testDlaaStorage() {
     check(reopened.load(*restored) && *restored == *session, "dlaa session: DLAA round-trips through the session");
 }
 int main() {
+    {
+        PresetLibrary viewing(scratch(L"viewing.v1"));
+        viewing.setIncludeBuiltins(false);
+        check(viewing.load(), "viewing library load");
+        viewing.addViewingBuiltins();
+        check(viewing.entries().size() == 4, "four viewing presets");
+        for (size_t i = 0; i != 4; ++i) {
+            const auto& e = viewing.entries()[i];
+            auto s = sample(); s.dlssgLite = true; s.vfgAutoRegulate = true;
+            s.dualSrEnabled = true; s.antiAlias.enabled = true;
+            const auto before = s;
+            auto chain = toChain(s);
+            check(PresetLibrary::applyToChain(e, chain, s).accepted, "viewing apply accepted");
+            check(s.validate().empty() && s.nr == before.nr && s.sr == before.sr && s.antiAlias == before.antiAlias && s.dualSrEnabled == before.dualSrEnabled &&
+                  s.color == before.color && !s.dlssgLite && !s.vfgAutoRegulate,
+                  "viewing preserves image effects and disables Lite");
+            check(s.audioSync == before.audioSync && s.audioOffsetMs == before.audioOffsetMs &&
+                  s.exportBitrateMbps == before.exportBitrateMbps && s.captureCompatible == before.captureCompatible,
+                  "viewing preserves audio capture export");
+            check(s.multiplier == (i == 0 ? 1u : 2u) && s.content == (i == 1 ? ContentRate::Auto : ContentRate::Transport) &&
+                  s.frameGenerationBackend == (i == 3 ? FrameGenerationBackend::Vfg : FrameGenerationBackend::Dlss),
+                  "viewing backend and cadence contract");
+            check(PresetLibrary::matchesSettings(e, s), "viewing fixed point matches");
+            auto changed = s; changed.content = s.content == ContentRate::Auto ? ContentRate::Transport : ContentRate::Auto;
+            check(!PresetLibrary::matchesSettings(e, changed), "cadence edit becomes Custom");
+            changed = s; changed.dlssgLite = true;
+            check(!PresetLibrary::matchesSettings(e, changed), "Lite edit becomes Custom");
+            changed = s; changed.frameGenerationBackend = FrameGenerationBackend::Fsr;
+            check(!PresetLibrary::matchesSettings(e, changed), "backend edit becomes Custom");
+            auto session = ChainSession::initial(s);
+            ChainSessionStore store(scratch((L"viewing-session-" + std::to_wstring(i)).c_str()));
+            check(store.save(session), "viewing session save");
+            auto restored = session;
+            check(store.load(restored) && restored == session, "viewing session roundtrip");
+        }
+        check(viewing.save() && viewing.load(), "viewing library save reload");
+        viewing.addViewingBuiltins(); viewing.addViewingBuiltins();
+        check(viewing.entries().size() == 4, "viewing re-registration has no duplicates");
+    }
+    {
+        for (size_t i = 0; i < PresetLibrary::nrLooks().size(); ++i) {
+            auto s = sample(); s.multiplier = 4; s.dlssgLite = true; s.content = ContentRate::Auto;
+            auto chain = toChain(s); const auto before = s;
+            check(PresetLibrary::applyNrLook(i, chain, s).accepted, "NR look transaction accepted");
+            check(PresetLibrary::matchingNrLook(chain, s) == int(i), "NR exact matching");
+            check(s.multiplier == before.multiplier && s.dlssgLite == before.dlssgLite && s.content == before.content &&
+                s.fgMotion == before.fgMotion && s.opticalFlowBackend == before.opticalFlowBackend && s.protection == before.protection &&
+                s.audioOffsetMs == before.audioOffsetMs && s.sr == before.sr && s.color == before.color, "NR preserves unrelated fields and protection");
+            if (i) {
+                auto* nr = chain.firstOf(EffectType::NrEnhance); nr->nr.model.style = 1;
+                check(PresetLibrary::matchingNrLook(chain, s) == -1, "manual NR style becomes Custom");
+            }
+            chain.mode = ChainMode::Node; const auto saved = chain;
+            check(!PresetLibrary::applyNrLook(i, chain, s).accepted && chain == saved, "NR look does not flatten node graph");
+        }
+    }
     testEffectNodeStorage();
     testDlaaStorage();
     testBeautyNodeStorage();

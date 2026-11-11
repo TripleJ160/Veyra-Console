@@ -574,14 +574,7 @@ ChainValidation compileChainExecutionPlan(const EffectChain& chain, const ChainE
         bool nrActive = false;
         for (uint32_t i = 0; i < chain.nodeCount; ++i)
             if (chain.nodes[i].enabled && chain.nodes[i].type == EffectType::NrEnhance) nrActive = true;
-        const std::array<EffectType, effectTypeCount> order = nrFirst
-            ? std::array{EffectType::Color, EffectType::NrEnhance, EffectType::Protection, EffectType::Beauty,
-                EffectType::AntiAliasing, EffectType::SuperResolution, EffectType::VideoHdr, EffectType::FrameGeneration}
-            : nrActive
-            ? std::array{EffectType::Color, EffectType::SuperResolution, EffectType::NrEnhance, EffectType::Protection,
-                EffectType::Beauty, EffectType::AntiAliasing, EffectType::VideoHdr, EffectType::FrameGeneration}
-            : std::array{EffectType::Color, EffectType::AntiAliasing, EffectType::SuperResolution, EffectType::NrEnhance,
-                EffectType::Protection, EffectType::Beauty, EffectType::VideoHdr, EffectType::FrameGeneration};
+        const auto order = listEffectOrder(nrActive, nrFirst);
         for (const auto type : order)
             for (uint32_t i = 0; i < chain.nodeCount; ++i)
                 if (chain.nodes[i].type == type) append(i);

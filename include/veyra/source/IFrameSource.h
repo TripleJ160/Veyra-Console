@@ -67,6 +67,9 @@ struct SourceInfo {
     std::string containerName;
     std::string videoCodecName;
     std::string videoPixelFormatName;
+    // Verified connected capture transport subtype, before decode/conversion.
+    // Empty for sources that do not expose it; never populated from a UI draft.
+    std::wstring captureTransportPixel;
     DolbyVisionInfo dolbyVision;
     pipeline::ColorDescription color;
 };

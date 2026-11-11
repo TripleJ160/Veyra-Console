@@ -65,7 +65,7 @@ Window {
     readonly property int menuRoom: 440
     // At least 760: the transport needs the middle column. A portrait film's narrow
     // window lets the pill reach past the picture's sides.
-    readonly property int barWidth: Math.min(860, Math.max(760, owner.width - 48))
+    readonly property int barWidth: Math.min(1040, Math.max(860, owner.width - 48))
     width: barWidth
     height: 92 + menuRoom
     // Centred; fullscreen: 24px above the screen's bottom edge (the design's 24px

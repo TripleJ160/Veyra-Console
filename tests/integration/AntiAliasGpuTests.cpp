@@ -22,6 +22,7 @@
 #include "veyra/engine/PreviewGpuSession.h"
 #include "veyra/engine/GraphDescription.h"
 #include "veyra/engine/EffectChain.h"
+#include "veyra/engine/PresetLibrary.h"
 #include "veyra/engine/TiledImageProcessor.h"
 #include "veyra/sink/ImageExportSink.h"
 #include "veyra/RuntimePaths.h"
@@ -312,8 +313,10 @@ Quality measure(const Scene& scene, const sink::RgbaImage& out, const sink::Rgba
     return q;
 }
 
+bool savePpm(const std::filesystem::path&, const sink::RgbaImage&);
 int sdrCase(const std::string& name, const AntiAliasSettings& setting) {
-    const Scene scene;
+    const bool native = std::getenv("VEYRA_AA_NATIVE") != nullptr;
+    const Scene scene(native ? 2560 : 640, native ? 1440 : 360);
     const auto coverage = supersample(scene);
     const auto truth = reference(scene, coverage);
     const auto flat = flatMask(scene);
@@ -326,6 +329,11 @@ int sdrCase(const std::string& name, const AntiAliasSettings& setting) {
               off.pixels.size() == on.pixels.size() && on.pixels.size() == size_t(scene.width) * scene.height * 4;
     check(ok, name + ": graph runs with the effect off and on");
     if (ok) {
+        if (const auto* folder = _wgetenv(L"VEYRA_AA_FRAME_OUT")) {
+            std::filesystem::create_directories(folder);
+            check(savePpm(std::filesystem::path(folder) / (name + "-off.ppm"), off) &&
+                  savePpm(std::filesystem::path(folder) / (name + "-on.ppm"), on), "native matched outputs saved");
+        }
         const auto base = measure(scene, off, off, coverage, truth, flat);
         const auto q = measure(scene, on, off, coverage, truth, flat);
         std::printf("METRIC case=%s changed=%zu flat=%zu flatChanged=%zu shapeEdges=%zu shapeMae=%.3f (off %.3f) lineEdges=%zu lineMae=%.3f (off %.3f)\n",
@@ -891,6 +899,69 @@ int temporalSrHdrCase(const char* name,unsigned quality){
     return failures?1:0;
 }
 
+// Bounded native-size, real List-mode video graph evidence. Readbacks exist only
+// in this test. All methods receive the same timestamps and source frame IDs.
+int evidenceCase() {
+    const auto* folder = _wgetenv(L"VEYRA_AA_FRAME_OUT");
+    if (!folder) return 2;
+    const auto* sequence = _wgetenv(L"VEYRA_AA_SEQUENCE");
+    const bool nrRequested = std::getenv("VEYRA_AA_WITH_NR") != nullptr;
+    const bool looks = std::getenv("VEYRA_NR_LOOKS") != nullptr;
+    std::vector<double> pts;
+    if (sequence) {
+        std::ifstream timestamps(std::filesystem::path(sequence) / "pts-ms.txt");
+        double value;
+        while (timestamps >> value) pts.push_back(value);
+        if (pts.size()!=12 || !std::is_sorted(pts.begin(),pts.end()) ||
+            std::adjacent_find(pts.begin(),pts.end())!=pts.end()) return 2;
+    } else for(unsigned i=0;i<12;++i) pts.push_back(double(i)*1000.0/60.0);
+    const Scene scene(2560,1440);
+    std::filesystem::create_directories(folder);
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const char* aaLabels[] = {"off", "fxaa", "smaa", "mlaa", "dlaa"};
+    const char* lookLabels[] = {"off", "subtle", "balanced", "full", "legacy", "original", "reduced"};
+    const auto* labels = looks ? lookLabels : aaLabels;
+    for (unsigned method = 0; method < (looks ? 7u : 5u); ++method) {
+        engine::EnhancementSettings settings;
+        settings.multiplier = 1; settings.nr = nrRequested;
+        settings.nrRuntime = engine::NrRuntime::Ampere;
+        settings.nrPolicy = pipeline::NrSizePolicy::P1440;
+        settings.model.performance = true; settings.residual.total = .25f;
+        settings.nrMotion = engine::MotionSource::OpticalFlow;
+        if (looks) {
+            auto chain=engine::toChain(settings);
+            if(!engine::PresetLibrary::applyNrLook(method,chain,settings).accepted) return 1;
+        } else if (method) settings.antiAlias = aa(AntiAliasMethod(method-1), method == 1 ? 1 : method == 2 ? 2 : 0);
+        const bool nr=settings.nr;
+        engine::StageRequest request; request.width=2560; request.height=1440; request.nr=nr;
+        pipeline::EnhanceGraphDesc desc; engine::describeStages(request,settings,desc);
+        desc.rgbInput=true; desc.outputDitherStep=0; desc.flowWidth=1920;desc.flowHeight=1080;
+        desc.runtimeAbsPath=runtime::localRuntimeDirectory().wstring();
+        auto session=std::make_unique<engine::PreviewGpuSession>();
+        bool ok=desc.fixedExecutionPlanError.empty() && session->initialize() && session->graph->initialize(desc) && session->graph->createViews();
+        for (unsigned frameId=0; ok && frameId<12; ++frameId) {
+            AVFrame* frame = sequence ? ppmFrame(std::filesystem::path(sequence) / std::format("frame{:03}.ppm", frameId+1)) : shiftedFrame(scene, double(frameId)*.75);
+            pipeline::EnhanceGraph::FrameOutputs out;
+            ok=frame && frame->width==2560 && frame->height==1440 && session->graph->process(frame, pts[frameId], frameId==0, out, frameId+1) && session->ring.waitIdle();
+            if (ok && (frameId==0 || frameId==5 || frameId==11)) {
+                sink::RgbaImage image;
+                ok=sink::readRgba8(session->context,session->ring,session->graph->videoFrameResource(out.videoSlot),image) &&
+                   savePpm(std::filesystem::path(folder) / std::format("{}-{:02}.ppm",labels[method],frameId),image);
+            }
+            av_frame_free(&frame);
+        }
+        const auto evaluations=session->graph->dlaaEvaluateCount();
+        const auto motion=session->graph->dlaaMotionEvaluateCount();
+        const auto nrEvaluations=session->graph->metrics().nrEvaluateCount;
+        std::printf("EVIDENCE method=%s nr=%d extent=2560x1440 frames=12 sourcePtsFileOrSynthetic60=true dlaa=%llu motion=%llu nrEvaluations=%llu notice=%zu\n",
+            labels[method],int(nr),(unsigned long long)evaluations,(unsigned long long)motion,(unsigned long long)nrEvaluations,session->graph->antiAliasNotice().size());
+        check(ok && (looks || method!=4 || (evaluations==12 && motion==11 && session->graph->antiAliasNotice().empty())) &&
+              (!nr || nrEvaluations==12), std::string("native video graph output: ")+labels[method]);
+        session->ring.drainQueue(); session->graph->shutdown(); session->shutdown();
+    }
+    return failures ? 1 : 0;
+}
+
 struct Case { std::string name; std::function<int()> run; };
 std::vector<Case> cases() {
     std::vector<Case> c;
@@ -924,6 +995,7 @@ std::vector<Case> cases() {
     c.push_back({"dlaa-hdr", [] { return dlaaHdrCase(); }});
     c.push_back({"dlaa-still", [] { return dlaaStillCase(); }});
     c.push_back({"tiled-image", [] { return tiledCase(); }});
+    c.push_back({"evidence-native", [] { return evidenceCase(); }});
     c.push_back({"real-frame", [] { return realFrameCase(); }});
     c.push_back({"timing-1080p", [] { return timingCase(1920, 1080); }});
     c.push_back({"timing-1440p", [] { return timingCase(2560, 1440); }});

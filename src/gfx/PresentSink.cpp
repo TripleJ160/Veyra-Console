@@ -299,7 +299,7 @@ bool PresentSink::initialize(ID3D12Device* device, ID3D12CommandQueue* queue,
     displayRefreshHz_=displayRefreshFps(hwnd_);
     frameStatisticsBaseValid_=false;
     // New swap chain: present ids restart; VEYRA_TEST_NO_DISPLAY_STATS=1 disables the samples.
-    displayLatencyEnabled_=GetEnvironmentVariableW(L"VEYRA_TEST_NO_DISPLAY_STATS",nullptr,0)==0;
+    displayLatencyEnabled_=log::playbackDiagnostics()&&GetEnvironmentVariableW(L"VEYRA_TEST_NO_DISPLAY_STATS",nullptr,0)==0;
     pendingPresents_={};lastDisplayedPresent_=0;lastSyncRefresh_=0;lastPresentRefresh_=0;replacedPresents_=0;lastSyncQpc_=0;refreshQpc_=0;displayLatencyMs_.clear();
     log::info("display-refresh",std::format("monitor refresh={:.3f} Hz at swapchain creation (0 = unknown); submissions above this rate cannot all be scanned out",displayRefreshHz_));
     log::info("present", std::format("present-sink: window {}x{} swapEffect={} buffers=3 vsync={} tearing={} captureCompatible={} (capture not verified)",
@@ -376,15 +376,21 @@ bool PresentSink::present(Status& status)
     if(!beforeOk){xessFailed_=true;status=Status::WindowFailure;return false;}
     // Vsync and Automatic Present(0,0) frames are shown at a vblank; a torn
     // frame has no single vblank to date it by.
-    const bool trackScanout=displayLatencyEnabled_&&!xess_&&!(flags&DXGI_PRESENT_ALLOW_TEARING);
+    const bool trackScanout=(displayLatencyEnabled_||refreshGridRequired_)&&!xess_&&!(flags&DXGI_PRESENT_ALLOW_TEARING);
     if(trackScanout)sampleDisplayLatency();
     LARGE_INTEGER presentQpc{};QueryPerformanceCounter(&presentQpc);
+    diagnostics::HostWaitSpan hostPresent("dxgi", "Present");
     const HRESULT hr = swapChain_->Present(syncInterval, flags);
+    hostPresent.finish(hr);
     presentTiming_.callMs=split();presentTiming_.result=hr;
     UINT presentId=0;
-    if(SUCCEEDED(hr)&&trackScanout&&SUCCEEDED(swapChain_->GetLastPresentCount(&presentId)))
-        pendingPresents_[pendingPresentNext_++%pendingPresents_.size()]={presentId,presentQpc.QuadPart,syncInterval==0};
-    if(presentContractDirty_||attemptedPresentCount_<=3||attemptedPresentCount_%120==0){
+    if(SUCCEEDED(hr)&&trackScanout) {
+        diagnostics::HostWaitSpan trace("dxgi", "GetLastPresentCount.perPresent");
+        const auto countResult=swapChain_->GetLastPresentCount(&presentId);
+        trace.finish(countResult);
+        if(SUCCEEDED(countResult))pendingPresents_[pendingPresentNext_++%pendingPresents_.size()]={presentId,presentQpc.QuadPart,syncInterval==0};
+    }
+    if(presentContractDirty_||attemptedPresentCount_<=3||(log::playbackDiagnostics()&&attemptedPresentCount_%120==0)){
         log::info("present-contract",std::format("backend={} sync={} flags=0x{:X} hr=0x{:X}",xess_?"XeSS":"DXGI",syncInterval,flags,unsigned(hr)));
         presentContractDirty_=false;
     }
@@ -443,7 +449,9 @@ PresentSink::FrameStatisticsDelta PresentSink::sampleFrameStatistics(){
     FrameStatisticsDelta delta;
     if(!swapChain_)return delta;
     DXGI_FRAME_STATISTICS stats{};
+    diagnostics::HostWaitSpan trace("dxgi", "GetFrameStatistics.periodic");
     delta.result=swapChain_->GetFrameStatistics(&stats);
+    trace.finish(delta.result);
     // DXGI_ERROR_FRAME_STATISTICS_DISJOINT: mode change or first frames; a
     // proxy swapchain may also refuse the query. Restart the baseline.
     if(FAILED(delta.result)){frameStatisticsBaseValid_=false;return delta;}
@@ -460,7 +468,10 @@ PresentSink::FrameStatisticsDelta PresentSink::sampleFrameStatistics(){
         delta.refreshes=uint64_t(stats.SyncRefreshCount-frameStatisticsBaseSyncRefresh_);
     }
     UINT lastPresent=0;
-    if(SUCCEEDED(swapChain_->GetLastPresentCount(&lastPresent)))delta.ahead=int64_t(lastPresent)-int64_t(stats.PresentCount);
+    diagnostics::HostWaitSpan countTrace("dxgi", "GetLastPresentCount.periodic");
+    const auto countResult=swapChain_->GetLastPresentCount(&lastPresent);
+    countTrace.finish(countResult);
+    if(SUCCEEDED(countResult))delta.ahead=int64_t(lastPresent)-int64_t(stats.PresentCount);
     frameStatisticsBaseValid_=true;
     frameStatisticsBasePresents_=presentCount_;
     frameStatisticsBaseDisplayed_=stats.PresentCount;
@@ -472,7 +483,11 @@ PresentSink::FrameStatisticsDelta PresentSink::sampleFrameStatistics(){
 void PresentSink::sampleDisplayLatency(){
     static const double frequency=[]{LARGE_INTEGER f{};QueryPerformanceFrequency(&f);return double(f.QuadPart);}();
     DXGI_FRAME_STATISTICS stats{};
-    if(!swapChain_||FAILED(swapChain_->GetFrameStatistics(&stats))||!stats.SyncQPCTime.QuadPart)return;
+    if(!swapChain_)return;
+    diagnostics::HostWaitSpan trace("dxgi", "GetFrameStatistics.perPresent");
+    const auto result=swapChain_->GetFrameStatistics(&stats);
+    trace.finish(result);
+    if(FAILED(result)||!stats.SyncQPCTime.QuadPart)return;
     // Measured vblank period from successive statistics, else the monitor rate.
     if(lastSyncQpc_&&stats.SyncRefreshCount>lastSyncRefresh_&&stats.SyncQPCTime.QuadPart>lastSyncQpc_)
         refreshQpc_=double(stats.SyncQPCTime.QuadPart-lastSyncQpc_)/double(stats.SyncRefreshCount-lastSyncRefresh_);
@@ -509,7 +524,7 @@ void PresentSink::sampleDisplayLatency(){
         if(pending.id!=stats.PresentCount&&(!newestQpc||newestQpc-double(pending.qpc)>double(stats.PresentCount-pending.id)*period*1.25))continue;
         const double ms=(scanout-double(stats.PresentCount-pending.id)*period-double(pending.qpc))*1000.0/frequency;
         if(pending.id==stats.PresentCount&&ms>=0&&ms<1000)latchMs_=std::min(latchMs_+.001,ms);
-        if(ms>=0&&ms<1000&&displayLatencyMs_.size()<4096)displayLatencyMs_.push_back(ms);
+        if(displayLatencyEnabled_&&ms>=0&&ms<1000&&displayLatencyMs_.size()<4096)displayLatencyMs_.push_back(ms);
     }
 }
 PresentSink::RefreshGrid PresentSink::refreshGrid()const{
@@ -532,8 +547,17 @@ PresentSink::DisplayLatencySummary PresentSink::takeDisplayLatency(){
     }
     ComPtr<IDXGISwapChainMedia> media;
     DXGI_FRAME_STATISTICS_MEDIA statistics{};
-    if(displayLatencyEnabled_&&!xess_&&swapChain_&&SUCCEEDED(swapChain_.As(&media))&&SUCCEEDED(media->GetFrameStatisticsMedia(&statistics)))
-        summary.compositionMode=int(statistics.CompositionMode);
+    if(displayLatencyEnabled_&&!xess_&&swapChain_) {
+        diagnostics::HostWaitSpan queryTrace("dxgi", "QueryInterface.SwapChainMedia");
+        const auto queryResult=swapChain_.As(&media);
+        queryTrace.finish(queryResult);
+        if(SUCCEEDED(queryResult)) {
+            diagnostics::HostWaitSpan mediaTrace("dxgi", "GetFrameStatisticsMedia");
+            const auto mediaResult=media->GetFrameStatisticsMedia(&statistics);
+            mediaTrace.finish(mediaResult);
+            if(SUCCEEDED(mediaResult))summary.compositionMode=int(statistics.CompositionMode);
+        }
+    }
     return summary;
 }
 

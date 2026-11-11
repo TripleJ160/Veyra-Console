@@ -1,5 +1,6 @@
 #include "veyra/Log.h"
 #include "veyra/diagnostics/Redaction.h"
+#include "veyra/diagnostics/HostWaitTrace.h"
 #include <sstream>
 #include <optional>
 #include <regex>
@@ -148,6 +149,16 @@ void Logger::setConsoleEnabled(bool enabled)
 
 void Logger::write(LogLevel level, const char* component, const std::string& message)
 {
+    // Suppress only high-volume informational telemetry, before the logger's
+    // mutex and file/console I/O. Warnings, errors and lifecycle evidence stay.
+    if(level==LogLevel::Info&&!log::playbackDiagnostics()){
+        const std::string_view channel(component);
+        if(channel=="frame-flow"||channel=="frame-rate"||channel=="capture-timing"||
+           channel=="present-cost"||channel=="display-stats"||channel=="display-latency"||
+           channel=="qml-frames"||channel=="player-timing"||channel=="fg-validity"||
+           channel=="live-fg-admission"||channel=="content-dedup")return;
+    }
+    diagnostics::HostWaitSpan writeTrace("logger", "write");
     const unsigned long threadId = GetCurrentThreadId();
     const std::string line = std::format("{} t={} [{}] [{}] {}",
         timestampUtc(), threadId, levelTag(level), component, message);
@@ -171,13 +182,17 @@ void Logger::write(LogLevel level, const char* component, const std::string& mes
         event.stage=event.stage.empty()?"runtime":event.stage;event.message=message;event.fingerprint=event.component+"|"+event.stage+"|"+diagnostics::redact(message);
         pendingEvent=std::move(event);
     }
+    diagnostics::HostWaitSpan lockTrace("logger", "mutexAcquire");
     std::lock_guard<std::mutex> lock(mutex_);
+    lockTrace.finish();
     if(pendingEvent){latestProblem_=pendingEvent->component+": "+pendingEvent->message;diagnostics_.add(std::move(*pendingEvent));}
     if (consoleEnabled_) {
+        diagnostics::HostWaitSpan consoleTrace("logger", "stdoutWriteFlush");
         std::fprintf(stdout, "%s\n", line.c_str());
         std::fflush(stdout);
     }
     if (file_ != nullptr) {
+        diagnostics::HostWaitSpan fileTrace("logger", "fileWriteFlush");
         std::fprintf(file_, "%s\n", line.c_str());
         bufferedLogBytes_+=line.size()+1;fileBytes_+=line.size()+1;
         if(nextRotation_&&fileBytes_>=nextRotation_){rotateLocked("size");return;}
@@ -215,6 +230,16 @@ bool verboseFrameLogs()
     static const bool enabled = [] {
         wchar_t value[2]{};
         return GetEnvironmentVariableW(L"VEYRA_VERBOSE_FRAME_LOGS", value, 2) == 1 && value[0] == L'1';
+    }();
+    return enabled;
+}
+
+bool playbackDiagnostics()
+{
+    static const bool enabled=[] {
+        const auto on=[](const wchar_t* name){wchar_t value[2]{};return GetEnvironmentVariableW(name,value,2)==1&&value[0]==L'1';};
+        return on(L"VEYRA_PLAYBACK_DIAGNOSTICS")||on(L"VEYRA_TRACE_HOST_WAITS")||
+               on(L"VEYRA_CAPTURE_PERIODIC_TRACE")||on(L"VEYRA_VERBOSE_FRAME_LOGS");
     }();
     return enabled;
 }

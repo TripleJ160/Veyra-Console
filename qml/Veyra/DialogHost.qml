@@ -63,6 +63,41 @@ Item {
         dialogHost: host
     }
 
+    DialogLayer {
+        key: "console-profile"
+        objectName: "console-profile-dialog"
+        dialogHost: host
+        title: "Veyra " + veyra.version + " — " + veyra.currentPresetName
+        glyph: "video"
+        dialogWidth: Math.min(680, host.width - 24)
+        Text {
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            text: parent && host.dialog === "console-profile" ? veyra.consolePlaybackStatus.headline : ""
+            color: Theme.t1; font.family: Theme.fontUi; font.pixelSize: 15; font.bold: true
+        }
+        Text {
+            objectName: "console-profile-live-status"
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            text: host.dialog === "console-profile" ? veyra.consolePlaybackStatus.details : ""
+            color: Theme.t2; font.family: Theme.fontUi; font.pixelSize: 12
+        }
+        DialogSection { text: "Profile behavior" }
+        Text {
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            text: "30→60 — conditional: Doubles retained-picture cadence. Does not enforce 60 fps or automatically disable FG for 60 fps content. Static holds, tiny changes and capture noise limit duplicate classification. Originals retains transport deliveries without FG. DLSS 2× — transport and VFG Medium 2× also retain transport timing."
+            color: Theme.t2; font.family: Theme.fontUi; font.pixelSize: 12
+        }
+        Text {
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            text: "Choose a viewing preset from the playback Preset menu or Settings → Playback. Changes are saved; advanced edits show Custom. Settings → Startup and window controls the Windows title bar. F11 enters or leaves full-height viewing. Audio sync is available from the music menu."
+            color: Theme.t3; font.family: Theme.fontUi; font.pixelSize: 12
+        }
+    }
+
     // --- 采集卡 -----------------------------------------------------------
     // The 1.4.4 capture panel, in the new design: device details and formats are
     // queried asynchronously, only an explicitly chosen audio input is opened,

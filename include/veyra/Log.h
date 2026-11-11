@@ -75,6 +75,8 @@ void info(const char* component, const std::string& message);
 void warn(const char* component, const std::string& message);
 void error(const char* component, const std::string& message);
 bool verboseFrameLogs();
+// Optional playback diagnostics, never required to render or validate a frame.
+bool playbackDiagnostics();
 
 // Key=value helper used by call sites that need structured fields.
 inline std::string kv(const char* key, uint64_t value)

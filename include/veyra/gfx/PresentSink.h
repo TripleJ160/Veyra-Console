@@ -135,6 +135,8 @@ public:
     // the shortest Present to scanout seen lately. Empty before any statistics.
     struct RefreshGrid { int64_t lastVblank100ns=0; double period100ns=0,latch100ns=0; };
     RefreshGrid refreshGrid()const;
+    // Owner-thread only. Functional VFG feedback is separate from diagnostics.
+    void requireRefreshGrid(bool required){refreshGridRequired_=required;}
     double displayRefreshHz()const{return displayRefreshHz_;}
     // The owner re-reads the monitor after a move or mode change.
     void setDisplayRefreshHz(double hz){if(hz>=1.0)displayRefreshHz_=hz;}
@@ -227,6 +229,7 @@ private:
     int64_t lastSyncQpc_=0;
     double refreshQpc_=0,latchMs_=2;
     bool displayLatencyEnabled_=true;
+    bool refreshGridRequired_=false;
     std::vector<double> displayLatencyMs_;
 };
 

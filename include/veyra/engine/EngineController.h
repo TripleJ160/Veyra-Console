@@ -12,6 +12,7 @@
 #include "veyra/engine/EffectChain.h"
 #include "veyra/engine/PresentationSettings.h"
 #include "veyra/diagnostics/FrameMetrics.h"
+#include "veyra/pipeline/FramePacket.h"
 #include "veyra/engine/PreviewView.h"
 #include "veyra/engine/EngineWatchdog.h"
 #include "veyra/sink/CaptureAudioSession.h"
@@ -112,6 +113,8 @@ struct PlayerSnapshot {
     // Source geometry for the UI: coded size and the container's display aspect
     // ratio (0 = use coded size). Known at open time, before the first frame.
     uint32_t sourceWidth=0,sourceHeight=0;
+    std::wstring captureTransportPixel;
+    pipeline::ColorDescription sourceInputColor;
     bool sourceHdr=false;
     // The source's own HDR numbers, straight from the container. They survive the
     // hardware-decode path, where there is no CPU luma to measure a histogram from.

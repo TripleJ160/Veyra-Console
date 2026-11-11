@@ -31,10 +31,30 @@ Window {
     color: typeof vySoftwareUi !== "undefined" && vySoftwareUi ? (cinema ? Theme.videoBlack : Theme.bgOuter) : "transparent"
     // 游戏模式 click-through (ui/GamePassthrough.h): Qt's own flags, so Qt keeps the
     // window's layered/transparent/no-activate styles in both interface renderers.
-    flags: Qt.Window | Qt.FramelessWindowHint
+    // Private-profile startup compatibility for window managers that reject
+    // frameless WS_POPUP windows. Qt owns the native frame and its lifetime.
+    readonly property bool systemTitleBar: veyra.preferences.systemTitleBar === true
+    property bool windowPreferencesReady: false
+    flags: Qt.Window | (systemTitleBar
+           ? Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint
+           : Qt.FramelessWindowHint)
            | (veyra.passthroughActive ? Qt.WindowTransparentForInput : 0)
            | (veyra.gameInputActive ? Qt.WindowDoesNotAcceptFocus : 0)
-    title: "Veyra " + veyra.version
+    title: "Veyra " + veyra.version + " — " + veyra.currentPresetName + " · " + veyra.currentNrLookName
+    onSystemTitleBarChanged: {
+        if (!windowPreferencesReady) return
+        // Qt owns the caption style. Keep the window visible and its content
+        // rectangle intact when flags change; videoHost rebinds the native child.
+        const state = visibility
+        const rect = Qt.rect(x, y, width, height)
+        layoutManagedGeometry = true
+        Qt.callLater(function() {
+            if (state === Window.FullScreen) showFullScreen()
+            else if (state === Window.Maximized) showMaximized()
+            else { show(); x = rect.x; y = rect.y; width = rect.width; height = rect.height }
+            videoHost.syncRect()
+        })
+    }
 
     // Page ids match the prototype's PAGES keys so a design screenshot and an
     // app screenshot can be compared under the same name.
@@ -61,6 +81,22 @@ Window {
     // Maximized binding settles. The cinema animation must not resize a screen
     // sized window during that transition.
     readonly property bool screenSized: fullTarget || fullRestorePending || visibility === Window.FullScreen || visibility === Window.Maximized
+    // Shift-title-drag explicitly hands geometry to the user's window layout.
+    // FancyZones leaves windows Windowed: cinema must not overwrite that rectangle.
+    // Session-only; a normal title drag or edge resize returns to film fitting.
+    property bool layoutManagedGeometry: systemTitleBar
+    onLayoutManagedGeometryChanged: if (videoHost) videoHost.syncRect()
+    readonly property bool fixedWindowGeometry: screenSized || systemTitleBar || layoutManagedGeometry
+    function beginWindowMove(modifiers) {
+        if (fullscreen) return
+        const previous = layoutManagedGeometry
+        layoutManagedGeometry = systemTitleBar || (modifiers & Qt.ShiftModifier) !== 0
+        const started = startSystemMove()
+        if (!started) layoutManagedGeometry = previous
+        else if (layoutManagedGeometry) widthBeforeNarrow = 0
+        if (started && previous && !layoutManagedGeometry) fitToFilm(filmAspect)
+        veyra.logUi("ui-window", "system move started=" + started + " layout geometry=" + layoutManagedGeometry)
+    }
     function toggleMaximized() {
         // The dock's restore button must also leave fullscreen, using the same
         // saved window state and cleanup as F11 / the transport button.
@@ -96,7 +132,7 @@ Window {
     function fitToFilm(aspect) {
         if (aspect > 0.2 && aspect < 5.0) filmAspect = aspect
         // The page, not `cinema`: onPageChanged calls this before that binding updates.
-        if (page !== "min" || screenSized) return
+        if (page !== "min" || fixedWindowGeometry) return
         // Narrow the window for a film too tall for the screen, keeping its centre.
         let w = widthBeforeNarrow > 0 ? widthBeforeNarrow : width
         if (Math.round(w / filmAspect) > maxPictureHeight)
@@ -112,17 +148,18 @@ Window {
     }
     // The pill hangs 46px below the picture: lift the window if that leaves the screen.
     function keepPillOnScreen() {
+        if (fixedWindowGeometry) return
         const a = root.screenArea
         const bottom = a.y + a.height
         if (y + pictureHeight + 46 + 8 > bottom) y = Math.max(a.y, bottom - pictureHeight - 46 - 8)
     }
     // .vy.cine transition: height .7s var(--spring-soft)
     Behavior on height {
-        enabled: root.cinema && !root.screenSized
+        enabled: root.cinema && !root.fixedWindowGeometry
         NumberAnimation { duration: Theme.d(700); easing.bezierCurve: Theme.springSoft }
     }
     onWidthChanged: {
-        if (cinema && !screenSized) height = Math.round(pictureHeight)
+        if (cinema && !fixedWindowGeometry) height = Math.round(pictureHeight)
         videoHost.syncRect()
     }
     // The window height animates towards the film's aspect, so the picture area has
@@ -131,7 +168,7 @@ Window {
     // mode exists to avoid.
     onHeightChanged: videoHost.syncRect()
     onMaximizedChanged: {
-        if (visibility === Window.Windowed && cinema && !fullTarget && !fullRestorePending) height = Math.round(pictureHeight)
+        if (visibility === Window.Windowed && cinema && !fixedWindowGeometry) height = Math.round(pictureHeight)
         videoHost.syncRect()
     }
     onPageChanged: {
@@ -154,14 +191,14 @@ Window {
         // clears the cinema height on any other page).
         const wasCinema = lastPage === "min"
         lastPage = page
-        if (!screenSized && wasCinema && page !== "min" && widthBeforeNarrow > 0) {
+        if (!fixedWindowGeometry && wasCinema && page !== "min" && widthBeforeNarrow > 0) {
             // A tall film narrowed the window; the other pages get their width back.
             x -= Math.round((widthBeforeNarrow - width) / 2)
             width = widthBeforeNarrow
             widthBeforeNarrow = 0
         }
-        if (!screenSized && page !== "min" && width < 720) { x -= Math.round((720 - width) / 2); width = 720 }
-        if (screenSized) { /* the screen is the window */ }
+        if (!fixedWindowGeometry && page !== "min" && width < 720) { x -= Math.round((720 - width) / 2); width = 720 }
+        if (fixedWindowGeometry) { /* the window manager owns the rectangle */ }
         else if (page === "min") { if (!wasCinema) heightBeforeCinema = height; fitToFilm(filmAspect) }
         else if (wasCinema && heightBeforeCinema >= 400) height = heightBeforeCinema
         else if (height < 600) height = 800
@@ -238,7 +275,7 @@ Window {
         switch (page) {
         case "min":
             // .min .stage: full width, height = the picture height.
-            return { x: 0, y: 0, width: width, height: Math.round(pictureHeight) }
+            return { x: 0, y: 0, width: width, height: (systemTitleBar || layoutManagedGeometry) ? height : Math.round(pictureHeight) }
         case "pro":
             // Share the page's responsive header, transport and status dimensions.
             // A second fixed-height formula let the HWND cover the playback bar.
@@ -305,7 +342,7 @@ Window {
             }
         }
         ExportPage { id: exportPage; pageId: "exp"; home: pages; onRequestPage: p => root.goPage(p) }
-        SettingsPage { id: settingsPage; pageId: "set"; home: pages; onRequestPage: p => root.goPage(p) }
+        SettingsPage { id: settingsPage; pageId: "set"; home: pages; onRequestPage: p => root.goPage(p); onRequestDialog: k => dialogs.open(k) }
     }
 
     // The five dialogs sit above the pages and below the dock's own tooltips.
@@ -343,7 +380,7 @@ Window {
         onRequestMinimize: root.showMinimized()
         onRequestMaximize: root.toggleMaximized()
         onRequestClose: root.close()
-        onRequestMove: if (!root.fullscreen) root.startSystemMove()
+        onRequestMove: modifiers => root.beginWindowMove(modifiers)
         pillToggleVisible: veyra.hasSource && (root.page === "min" || root.fullscreen)
         pillHidden: root.pillHidden
         onRequestTogglePill: root.setPillHidden(!root.pillHidden)
@@ -375,7 +412,11 @@ Window {
             x: l ? 0 : r ? root.width - width : 12
             y: t ? 0 : b ? root.height - height : 12
             cursorShape: modelData.c
-            onPressed: root.startSystemResize(modelData.e)
+            onPressed: {
+                const previous = root.layoutManagedGeometry
+                root.layoutManagedGeometry = root.systemTitleBar
+                if (!root.startSystemResize(modelData.e)) root.layoutManagedGeometry = previous
+            }
         }
     }
 
@@ -478,7 +519,7 @@ Window {
         if (!fullscreen) {
             fullLocked = false
             closeQuickPanel()
-            if (cinema && visibility === Window.Windowed && !fullRestorePending) height = Math.round(pictureHeight)
+            if (cinema && visibility === Window.Windowed && !fixedWindowGeometry) height = Math.round(pictureHeight)
         }
         fullControls = true
         fullHide.restart()
@@ -681,7 +722,10 @@ Window {
         // Windowed cinema: the pill straddles the picture edge (D1). It hides under
         // an open dialog, which lives in the main window below it.
         cinema: root.cinema && !root.fullscreen
-        pillTop: (root.maximized ? root.height : root.pictureHeight) - 46
+        // A layout rectangle can end at the work-area edge; keep the complete
+        // 92px control pill inside it instead of hanging over the taskbar.
+        pillTop: (root.systemTitleBar || root.layoutManagedGeometry) ? root.height - 92 - 8
+                                           : (root.maximized ? root.height : root.pictureHeight) - 46
         shown: veyra.hasSource && !root.pillHidden && !veyra.gameInputActive && (root.fullscreen ? root.fullControls && !root.fullLocked
                                                    : root.cinema && root.shownPage === "min"
                                                      && root.leavingPage === "" && dialogs.dialog === ""
@@ -692,7 +736,7 @@ Window {
         onRequestLock: root.toggleLock()
         onRequestHide: root.setPillHidden(true)
         onRequestPlaylist: playlistWindow.toggle()
-        onRequestMove: if (!root.fullscreen && !root.maximized) root.startSystemMove()
+        onRequestMove: if (!root.fullscreen && !root.maximized) root.beginWindowMove(Qt.NoModifier)
         onActivity: root.pointerActivity()
     }
     // The cinema / fullscreen pill can be hidden for games (capture card, streams); the
@@ -724,6 +768,7 @@ Window {
         onActivated: root.goPage(root.page === "min" ? "pro" : "min")
     }
     Shortcut { sequences: ["F11", "Alt+Return", "Alt+Enter"]; onActivated: root.toggleFullscreen() }
+    Shortcut { sequence: "F10"; onActivated: { if (root.fullscreen) root.toggleFullscreen(); root.goPage("set") } }
     // In 游戏模式 Esc closes the adjust panel and gives the input back to the game.
     Shortcut {
         sequence: "Esc"
@@ -954,7 +999,8 @@ Window {
         if (root.test.dialog !== undefined) dialogs.open(root.test.dialog)
         videoHost.syncRect()
         if (root.test.menu !== undefined) testMenuTimer.start()
-        if (root.test.fullBar !== undefined) testFullTimer.start()
+        if (root.test.fullBar !== undefined || root.test.startFullscreen === true) testFullTimer.start()
+        windowPreferencesReady = true
     }
     // The menu anchors on laid-out buttons, so it opens once the page has settled.
     // --full-bar shown|hidden: enter fullscreen with the control window held shown

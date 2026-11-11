@@ -190,7 +190,7 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
         // cap (0 keeps the presented rate).
         {"recordBitrateMbps", {0, 400}},
         {"recordFps", {0, 240}}};
-    static const QStringList flags{"recordHevc", "recordAudio", "subtitleEnabled", "subtitleBackground", "subtitleFit",
+    static const QStringList flags{"systemTitleBar", "recordHevc", "recordAudio", "subtitleEnabled", "subtitleBackground", "subtitleFit",
                                    "subtitleSecondLanguage", "audioForceStereo", "holdCompare",
                                    "magewellLowLatency", "blackmagicNativeCapture", "captureShowAllFrameRates", "cinePillHidden", "exportStopsPlayback", "obsGameCapture", "autoResume", "fullscreenMemoryProtection", "prewarmEnhancement", "hdrFgCompatibility", "computeOnMonitorGpu", "deinterlace", "networkAutoReconnect"};
     QVariant stored;
@@ -727,13 +727,7 @@ QString QmlPlayerBridge::sourceFormatText() const {
     if (rate.isEmpty()) return {};
     parts << rate;
     if (sourceKind() == QLatin1String("capture")) {
-        for (const auto& f : impl_->captureFormatList)
-            if (f.key == impl_->captureFormatKey) {
-                const QString label = uiText(f.label);
-                const int dot = label.lastIndexOf(QString::fromUtf8("·"));
-                if (dot >= 0) parts << label.mid(dot + 1).trimmed();
-                break;
-            }
+        if(!impl_->snapshot.captureTransportPixel.empty())parts<<utf8Of(impl_->snapshot.captureTransportPixel);
     }
     const QString colour = uiText(impl_->snapshot.colorStatus);
     if (!colour.isEmpty()) parts << colour.section(QString::fromUtf8(" → "), 0, 0).trimmed();
