@@ -18,7 +18,7 @@ DLSS/VFG, NR models, residual blending, protection masks and AA algorithms are i
 
 The prepared app statically links the proprietary NGX core, in addition to loading optional models. Applicable distribution permission for that combination with GPL was not established. Omitting model DLLs alone does not clear the executable. The no-NGX build experiment failed because playback still depends on NGX headers/graph targets. See [runtime audit](RUNTIMES.md). The working private application and user configuration remain untouched.
 
-No NR/FG/SR model DLLs, CUDA/VFX package, personal settings, capture identifiers, logs, recordings, research ZIP or credentials are uploaded. The source contains adapters and their existing notices, not proprietary model implementations. Upstream history is retained; research-specific personal reports are excluded from the publication delta.
+No NR/FG/SR model DLLs, CUDA/VFX package, personal settings, capture identifiers, research logs/recordings, research ZIP or credentials are uploaded. The source contains adapters and their existing notices, not proprietary model implementations. Upstream history and its previously public promotional media are retained; the large promo videos/GIF are excluded from source release archives. Research-specific personal reports are excluded from the publication delta.
 
 ## Validation scope
 
