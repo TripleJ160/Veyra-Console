@@ -1,5 +1,7 @@
 // QML bridge: Preferences responsibilities.
 #include "../QmlPlayerBridge_p.h"
+#include <QWindow>
+#include <cmath>
 
 namespace veyra::ui {
 // --- shell preferences -------------------------------------------------------
@@ -173,6 +175,23 @@ QRect QmlPlayerBridge::launchScreenAvailable() const {
     const QPoint at = QCursor::pos();
     return screenAvailableAt(at.x(), at.y());
 }
+bool QmlPlayerBridge::centerVideoWindow(QObject* object) const {
+    auto* window=qobject_cast<QWindow*>(object);
+    if(!window||window->visibility()!=QWindow::Windowed||!window->screen())return false;
+    const auto area=window->screen()->availableGeometry();
+    const auto margins=window->frameMargins();
+    const int maxWidth=area.width()-margins.left()-margins.right();
+    const int maxHeight=area.height()-margins.top()-margins.bottom();
+    // Qt screen geometry and frame margins are both device-independent pixels.
+    // Preserve a 16:9 client picture; the native frame must also fit the work area.
+    const int height=std::min(maxHeight,int(std::floor(maxWidth*9.0/16.0)));
+    const int width=int(std::round(height*16.0/9.0));
+    if(width<window->minimumWidth()||height<window->minimumHeight())return false;
+    window->resize(width,height);
+    window->setFramePosition({area.x()+(area.width()-width-margins.left()-margins.right())/2,
+                              area.y()+(area.height()-height-margins.top()-margins.bottom())/2});
+    return true;
+}
 
 bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
     if(key==QLatin1String("blackmagicNativeCapture")){
@@ -274,7 +293,7 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
         stored = v;
     } else if (key == QLatin1String("windowSize")) {
         const QString v = value.toString();
-        static const QStringList sizes{"1280x800", "1600x1000", "1920x1200", "last"};
+        static const QStringList sizes{"1280x800", "1600x1000", "1920x1200", "last", "center-video"};
         if (!sizes.contains(v)) return false;
         stored = v;
     } else {
@@ -508,7 +527,7 @@ bool QmlPlayerBridge::setShortcut(const QString& action, const QString& sequence
         emit notice(tr("%1 已被固定功能占用").arg(text),true); return false;
     }
     // Keys the shell already owns cannot be taken over.
-    static const QStringList reserved{"Esc", "F11", "Left", "Right", "Up", "Down", "Ctrl+O", "Ctrl+E",
+    static const QStringList reserved{"Esc", "F11", "Ctrl+Alt+C", "Left", "Right", "Up", "Down", "Ctrl+O", "Ctrl+E",
                                       "B", "Z", "X", "T", "Y", "Shift+Z", "Shift+X", "Alt+Return"};
     if (reserved.contains(text)) { emit notice(tr("%1 已被固定功能占用").arg(text), true); return false; }
     const auto current = shortcuts();

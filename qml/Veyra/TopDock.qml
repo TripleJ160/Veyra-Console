@@ -24,6 +24,7 @@ Item {
     property bool maximized: false
     signal requestMinimize()
     signal requestMaximize()
+    signal requestCenterVideo()
     signal requestClose()
     signal requestMove(int modifiers)
     // The cinema pill's eye: shown on 极简 and in fullscreen, toggles the pill.
@@ -314,6 +315,7 @@ Item {
             // Window controls: minimize, maximize/restore, close.
             Repeater {
                 model: [
+                    { id: "center", icon: "max", tip: "Center 16:9 window · Ctrl+Alt+C" },
                     { id: "min", icon: "minus", tip: qsTr("最小化") },
                     { id: "max", icon: "max", tip: dockRoot.maximized ? qsTr("还原") : qsTr("最大化") },
                     { id: "close", icon: "x", tip: qsTr("关闭") }
@@ -373,6 +375,7 @@ Item {
                         onTapped: {
                             if (wbtn.modelData.id === "min") dockRoot.requestMinimize()
                             else if (wbtn.modelData.id === "max") dockRoot.requestMaximize()
+                            else if (wbtn.modelData.id === "center") dockRoot.requestCenterVideo()
                             else dockRoot.requestClose()
                         }
                     }

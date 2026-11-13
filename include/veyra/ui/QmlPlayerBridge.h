@@ -856,6 +856,7 @@ public:
     // which centred the window across two of three monitors (field report 2026-10-01).
     Q_INVOKABLE QRect screenAvailableAt(int x, int y) const;
     Q_INVOKABLE QRect launchScreenAvailable() const;
+    Q_INVOKABLE bool centerVideoWindow(QObject* window) const;
     QString screenshotDirectory() const;
     QString lastScreenshot() const;
     QString dataDirectory() const;

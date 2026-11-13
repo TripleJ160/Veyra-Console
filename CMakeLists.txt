@@ -1220,6 +1220,9 @@ if(VEYRA_BUILD_QML_UI AND Qt6_FOUND)
   # piece of the old shell worth keeping, and its own dialog is what users
   # expect from a desktop app. No QWidget UI is created.
   target_link_libraries(veyra_qml_bridge PUBLIC veyra_engine Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Widgets PRIVATE shell32)
+  add_executable(veyra_console_window_probe tests/integration/ConsoleWindowGeometryProbe.cpp)
+  target_link_libraries(veyra_console_window_probe PRIVATE veyra_qml_bridge)
+  target_link_options(veyra_console_window_probe PRIVATE /STACK:33554432)
   add_executable(veyra_console_preset_probe tests/integration/ConsolePresetBridgeProbe.cpp)
   target_link_libraries(veyra_console_preset_probe PRIVATE veyra_qml_bridge)
   target_link_options(veyra_console_preset_probe PRIVATE /STACK:33554432)

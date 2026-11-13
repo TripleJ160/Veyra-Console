@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="Layout schematic: centered sixteen by nine console window with other applications on both sides">
+<rect width="1280" height="360" rx="12" fill="#15171d"/>
+<rect x="22" y="42" width="270" height="270" rx="8" fill="#26344b"/>
+<rect x="988" y="42" width="270" height="270" rx="8" fill="#363047"/>
+<rect x="331" y="0" width="618" height="348" fill="#090a0e" stroke="#f49b4b" stroke-width="2"/>
+<g fill="#f4f4f7" font-family="Segoe UI, sans-serif" text-anchor="middle"><text x="157" y="180" font-size="22">Other apps</text><text x="1123" y="180" font-size="22">Other apps</text><text x="640" y="163" font-size="28">Console picture</text><text x="640" y="204" font-size="22">16:9 centered window</text><text x="640" y="245" font-size="18" fill="#f49b4b">Ctrl+Alt+C</text></g><rect x="0" y="348" width="1280" height="12" fill="#444753"/>
+</svg>

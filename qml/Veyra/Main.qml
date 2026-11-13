@@ -83,14 +83,14 @@ Window {
     readonly property bool screenSized: fullTarget || fullRestorePending || visibility === Window.FullScreen || visibility === Window.Maximized
     // Shift-title-drag explicitly hands geometry to the user's window layout.
     // FancyZones leaves windows Windowed: cinema must not overwrite that rectangle.
-    // Session-only; a normal title drag or edge resize returns to film fitting.
+    // Session-only; explicit sizing stays owned by the user/window manager.
     property bool layoutManagedGeometry: systemTitleBar
     onLayoutManagedGeometryChanged: if (videoHost) videoHost.syncRect()
     readonly property bool fixedWindowGeometry: screenSized || systemTitleBar || layoutManagedGeometry
     function beginWindowMove(modifiers) {
         if (fullscreen) return
         const previous = layoutManagedGeometry
-        layoutManagedGeometry = systemTitleBar || (modifiers & Qt.ShiftModifier) !== 0
+        layoutManagedGeometry = previous || systemTitleBar || (modifiers & Qt.ShiftModifier) !== 0
         const started = startSystemMove()
         if (!started) layoutManagedGeometry = previous
         else if (layoutManagedGeometry) widthBeforeNarrow = 0
@@ -103,6 +103,28 @@ Window {
         if (fullscreen) { toggleFullscreen(); return }
         visibility = maximized ? Window.Windowed : Window.Maximized
         veyra.logUi("ui-window", "maximized=" + (visibility === Window.Maximized))
+    }
+    function prepareWindowResize() {
+        // Do this before Windows enters its modal resize loop. An onWidthChanged
+        // height correction otherwise fights diagonal/vertical resizing.
+        layoutManagedGeometry = true
+        widthBeforeNarrow = 0
+    }
+    function centerVideoWindow() {
+        layoutManagedGeometry = true
+        widthBeforeNarrow = 0
+        fullRestoreVisibility = Window.Windowed
+        fullRestorePending = true
+        fullTarget = false
+        fullLocked = false
+        closeQuickPanel()
+        switchPageInstantly("min")
+        showNormal()
+        Qt.callLater(function() {
+            if (!veyra.centerVideoWindow(root)) toast.show("This screen is too small for the current window minimum.", true)
+            root.fullRestorePending = false
+            videoHost.syncRect()
+        })
     }
     Binding { target: Theme; property: "reduced"; value: veyra.reducedMotion || root.test.reducedMotion === true }
     Binding { target: Theme; property: "accentName"; value: veyra.preferences.accent || "orange" }
@@ -342,7 +364,7 @@ Window {
             }
         }
         ExportPage { id: exportPage; pageId: "exp"; home: pages; onRequestPage: p => root.goPage(p) }
-        SettingsPage { id: settingsPage; pageId: "set"; home: pages; onRequestPage: p => root.goPage(p); onRequestDialog: k => dialogs.open(k) }
+        SettingsPage { id: settingsPage; pageId: "set"; home: pages; onRequestPage: p => root.goPage(p); onRequestDialog: k => dialogs.open(k); onRequestCenterVideo: root.centerVideoWindow() }
     }
 
     // The five dialogs sit above the pages and below the dock's own tooltips.
@@ -363,6 +385,7 @@ Window {
     // The dock floats above every page and retracts on its own.
     TopDock {
         id: dock
+        onRequestCenterVideo: root.centerVideoWindow()
         anchors.horizontalCenter: parent.horizontalCenter
         // The node page is the professional mode's node view.
         currentPage: root.page === "node" ? "pro" : root.page
@@ -414,7 +437,7 @@ Window {
             cursorShape: modelData.c
             onPressed: {
                 const previous = root.layoutManagedGeometry
-                root.layoutManagedGeometry = root.systemTitleBar
+                root.prepareWindowResize()
                 if (!root.startSystemResize(modelData.e)) root.layoutManagedGeometry = previous
             }
         }
@@ -769,6 +792,7 @@ Window {
     }
     Shortcut { sequences: ["F11", "Alt+Return", "Alt+Enter"]; onActivated: root.toggleFullscreen() }
     Shortcut { sequence: "F10"; onActivated: { if (root.fullscreen) root.toggleFullscreen(); root.goPage("set") } }
+    Shortcut { sequence: "Ctrl+Alt+C"; onActivated: root.centerVideoWindow() }
     // In 游戏模式 Esc closes the adjust panel and gives the input back to the game.
     Shortcut {
         sequence: "Esc"
@@ -975,6 +999,7 @@ Window {
     // and centred. A --size test switch resizes after this, so tests keep theirs.
     function applyStartupSize() {
         const choice = veyra.preferences.windowSize || "1280x800"
+        if (choice === "center-video") return // applied after the startup page below
         const text = choice === "last" ? (veyra.preferences.lastWindow || "1280x800") : choice
         const wh = text.split("x").map(Number)
         if (wh.length !== 2 || !(wh[0] > 0) || !(wh[1] > 0)) return
@@ -1001,6 +1026,7 @@ Window {
         if (root.test.menu !== undefined) testMenuTimer.start()
         if (root.test.fullBar !== undefined || root.test.startFullscreen === true) testFullTimer.start()
         windowPreferencesReady = true
+        if (veyra.preferences.windowSize === "center-video") Qt.callLater(root.centerVideoWindow)
     }
     // The menu anchors on laid-out buttons, so it opens once the page has settled.
     // --full-bar shown|hidden: enter fullscreen with the control window held shown

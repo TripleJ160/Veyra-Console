@@ -15,6 +15,7 @@ VPage {
     id: root
     signal requestPage(string page)
     signal requestDialog(string key)
+    signal requestCenterVideo()
 
     property string section: "look"
     // The shortcut row waiting for a new key ("" = none).
@@ -284,6 +285,11 @@ VPage {
                             }
                         }
                         VRow {
+                            label: "Center 16:9 video window"
+                            hint: "Use the available screen height and leave the desktop sides free. Ctrl+Alt+C."
+                            VButton { text: "Fit and center"; onClicked: root.requestCenterVideo() }
+                        }
+                        VRow {
                             label: qsTr("打开时的默认页面")
                             hint: qsTr("首页 = 选择片源的页面（点顶部 Logo 也能回到这里）")
                             VSeg {
@@ -304,6 +310,7 @@ VPage {
                             VSelect {
                                 objectName: "set-window-size"
                                 readonly property var sizes: [
+                                    { id: "center-video", label: "Centered 16:9 video" },
                                     { id: "1280x800", label: "1280 × 800" },
                                     { id: "1600x1000", label: "1600 × 1000" },
                                     { id: "1920x1200", label: "1920 × 1200" },

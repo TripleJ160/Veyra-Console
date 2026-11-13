@@ -8,7 +8,7 @@
 
 - **Easy motion choices:** four presets let you keep the original pictures or try frame generation, which adds pictures between captured frames to smooth motion.
 - **Separate image looks:** seven choices range from enhancement off to subtle or stronger AI changes. Switching a look keeps your motion, capture, audio and window settings. An easy blend slider helps keep more of the game's original appearance.
-- **More convenient desktop viewing:** a normal Windows title bar lets you drag the player into FancyZones layouts. Full-height viewing and aspect-ratio fitting keep the game picture correctly proportioned.
+- **More convenient desktop viewing:** a normal Windows title bar lets you drag the player into FancyZones layouts. A new **Center 16:9 window** action uses the available screen height while leaving the desktop sides free; manual corner resizing stays under your control. F11 still provides fullscreen viewing.
 - **Clearer settings and status:** see which motion preset and image look are selected, when you've customized them, and what capture format is actually connected rather than just requested.
 
 **The underlying AI models and filters come from upstream.** This is mainly a console-focused usability and diagnostics fork; it has not been proven universally sharper, faster or free of stutters. **The public release is currently source-only**, with no ready-to-run Windows download; details below.
@@ -35,6 +35,18 @@ These steps describe the **locally built application**. First [build from source
 
 The launcher does not open a device, install drivers, change display settings or import another installation's preferences. Settings persist locally. Use the controller directly with the console; this binary excludes Remote Play, Moonlight and Xbox streaming clients.
 
+## Keep other apps beside the console
+
+Press **Ctrl+Alt+C** to make Veyra a centered **16:9 window** using the largest size that fits the current monitor's available desktop. Other windows can occupy both sides of an ultrawide display. You can also use the top dock's **Center 16:9 window** button or **Settings → Startup and window → Fit and center**. Select **Centered 16:9 video** as the startup window size to reopen this way.
+
+![Schematic of a centered console window with desktop space on both sides](docs/images/console/centered-window.svg)
+
+*Layout schematic, not a gameplay screenshot.*
+
+The action works from fullscreen or maximized mode and keeps the Windows title-bar preference. Corners and edges resize freely without cinema mode fighting the drag; use Ctrl+Alt+C again to refit. **F11** still toggles actual fullscreen; Windows maximize still fills the desktop. FancyZones and Shift-drag remain available with the native title bar.
+
+This changes the window geometry, not the capture resolution, processing extent, display refresh, image look or FG backend. A visible taskbar and native title bar consume some height, so a 1440p display does not always leave a full 1440 pixels for the picture. Smaller windows cannot recover missing source detail. [Validation and limits](docs/console/CENTERED_WINDOW.md).
+
 ## Compared with upstream
 
 Exact baseline: **v2.1.5**, commit **dc6f6e1e5e51b31d027e4d369949332c130238de**, not “latest upstream.” History, attribution and notices are retained. Research recordings and machine-specific logs stay local; selected source and tests are published.
@@ -48,7 +60,7 @@ Exact baseline: **v2.1.5**, commit **dc6f6e1e5e51b31d027e4d369949332c130238de**,
 | FXAA / SMAA / MLAA / DLAA | Already implemented | Verified paths; corrected List order display | No stronger filtering or invented engine jitter |
 | Presets | General chain presets | Motion-only presets plus image looks | Independent persistence and Custom labels |
 | Capture information | Selection and generic status | Requested versus connected format/color | Does not measure engine FPS or certify HDMI mode |
-| Desktop viewing | Frameless/cinema/fullscreen | Native caption, FancyZones resizing, F10 access | Full-height 16:9 fit; no display-mode change |
+| Desktop viewing | Frameless/cinema/fullscreen | Centered 16:9 window, free corner resizing, native caption/FancyZones | Fits the current work area including the title bar; F11 remains fullscreen |
 | Audio controls | Existing sync/offset | Settings reachable without file tracks | Audio algorithm unchanged |
 | Diagnostics | Frequent optional queries/logs | Gating in ordinary playback | Warnings retained; stalls not claimed resolved |
 | Rejected-real fallback | Absent | Default-off research opt-in | Not a proven everyday latency fix |
