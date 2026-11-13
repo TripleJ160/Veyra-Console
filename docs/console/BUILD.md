@@ -1,6 +1,6 @@
 # Reproduce the Windows build
 
-This is a Windows x64 C++20 / D3D12 / Qt Quick application. Use the release tag `v2.1.5-console.1` and its manifest's exact source commit. The public branch preserves upstream v2.1.5 history; machine-specific research scripts/profiles are not prerequisites.
+This is a Windows x64 C++20 / D3D12 / Qt Quick application. Use the release tag `v2.1.5-console.2` and its manifest's exact source commit. The public branch preserves upstream v2.1.5 history; machine-specific research scripts/profiles are not prerequisites.
 
 **Source preview:** no Windows binary is publicly distributed. Local build success does not clear redistribution of the linked proprietary NGX core; see [RUNTIMES.md](RUNTIMES.md).
 

@@ -1,39 +1,28 @@
-# Veyra Console 2.1.5-console.1 — source preview
+# Veyra Console 2.1.5-console.2 — centered desktop window
 
-Independent Windows console-capture fork of upstream Veyra v2.1.5, commit `dc6f6e1e5e51b31d027e4d369949332c130238de`. This is a **source/evidence prerelease, not a downloadable Windows application release**.
+A focused **source-only** release for viewing console video beside other desktop applications.
 
-## Changes
+## What changed
 
-- Four integrated viewing presets, separate from seven NR looks.
-- NR correction shortcut, persisted selections and accurate Custom/protection status.
-- Native title-bar/FancyZones workflow, full-height Fit and Settings access.
-- Requested versus connected capture/color information; no engine-FPS claim.
-- List processing-order display corrected to match the existing engine graph.
-- Optional diagnostic queries/logging gated; rejected-real fallback stays off.
-- Preset, bridge, cadence/scheduling fixtures and reusable analysis tools.
+- **Ctrl+Alt+C** fits a centered 16:9 normal window into the current monitor's work area, leaving the desktop sides free on an ultrawide display.
+- The top dock and Settings → Startup and window expose the same action. Startup size **Centered 16:9 video** persists through the existing preferences.
+- Frameless edge/corner resizing now hands geometry to Windows instead of allowing cinema mode's width/height binding to fight the drag. Snapped/FancyZones rectangles keep their ownership.
+- Centering works from windowed, maximized and fullscreen states, includes native title-bar margins, and retains the title-bar preference. F11 and Windows maximize keep their existing meanings.
 
-DLSS/VFG, NR models, residual blending, protection masks and AA algorithms are inherited. No new model, lower controller latency, sharper gameplay or resolved stalls is claimed. Performance/Lite remains off in viewing presets.
+Window placement does not change capture dimensions, processing resolution, NR, AA, FG, audio or display refresh. A visible taskbar/title bar consumes some image height. There is no image-quality, controller-latency or stall-resolution claim.
 
-## Why no public executable
+## Validation
 
-The prepared app statically links the proprietary NGX core, in addition to loading optional models. Applicable distribution permission for that combination with GPL was not established. Omitting model DLLs alone does not clear the executable. The no-NGX build experiment failed because playback still depends on NGX headers/graph targets. See [runtime audit](RUNTIMES.md). The working private application and user configuration remain untouched.
+The exact public source implementation built in optimized Windows Release and passed the native Main.qml/bridge window regression with both caption styles, including automatic centered startup, corner resize, work-area fit, fullscreen restoration and centering from maximize. A separate private build of the same window change passed Qt scale factors 1.0/1.5/2.0, 25 focused QtQuick component checks and a bounded recorded-footage playback smoke. The public build test had no optional vendor models installed; it exercised window geometry, not AI inference.
 
-No NR/FG/SR model DLLs, CUDA/VFX package, personal settings, capture identifiers, research logs/recordings, research ZIP or credentials are uploaded. The source contains adapters and their existing notices, not proprietary model implementations. Upstream history and its previously public promotional media are retained; the large promo videos/GIF are excluded from source release archives. Research-specific personal reports are excluded from the publication delta.
+The initial 200% test requested a window taller than the scaled desktop; Windows clamped it. The corrected fixture requests a legal size. The earlier full Quick suite was interrupted without a result while using an incomplete test plugin path; the corrected focused component run passed. These are retained local test limitations, not hidden product passes. Mixed-monitor DPI transitions and every FancyZones version were not exhaustively retested.
 
-## Validation scope
+## Distribution and build
 
-The optimized AI-enabled publication candidate built successfully with parallelism 2. Focused checks passed: 645 preset checks, 461 chain checks, 154 actual bridge checks; capture format/color, presentation worker, live/GPU timing contracts; 52 Python analysis/session tests. QtQuick: **176 passed, 0 failed, 1 existing skip**. Two earlier QtQuick invocations failed due to test staging (missing test DLL path, then missing QML test folder); the corrected test environment passed without a product change.
+**There is no public Windows executable in this release.** The previously documented combined NGX/GPL distribution question remains unresolved. The runnable private application is delivered separately to its owner. No proprietary runtimes/models, personal profiles, recordings or desktop screenshots are in the uploaded assets.
 
-A bounded 14-phase recorded-playback check passed with optional runtimes installed only in an isolated validation copy: all seven NR looks, four AA methods, NR+DLAA, model switching and recovery to standard DLSS 2×. A separate missing-runtime run refused all six NR-on looks and applied Originals/Reference. These are local tests, **not evidence that the source download includes runtimes**.
+This update is based on the previous public Console .1 source plus the focused window change; it does not publish the separate private ANR/Responsive research branches. Existing Console viewing presets, NR looks and AA behavior remain as documented.
 
-Pixel sheets reuse prior identical-frame native-1440p evidence from unchanged processing code. No new live-capture, audio-sync, high-speed-camera or sustained-performance measurement was performed. Native caption is visible in actual UI screenshots. Full-height behavior uses existing source/prior evidence; a clean fullscreen screenshot was not obtained during publication. No upstream UI image was fabricated: the upstream comparison is source-backed.
+Use [build instructions](https://github.com/TripleJ160/Veyra-Console/blob/main/docs/console/BUILD.md), [window instructions](https://github.com/TripleJ160/Veyra-Console/blob/main/docs/console/CENTERED_WINDOW.md), and [runtime/distribution status](https://github.com/TripleJ160/Veyra-Console/blob/main/docs/console/RUNTIMES.md). The matching patched FFmpeg source remains at the immutable [Console .1 source asset](https://github.com/TripleJ160/Veyra-Console/releases/download/v2.1.5-console.1/FFmpeg-9.0.1-slices256-dav1d-zlib-source.zip); its SHA256 is `49db22049f072bd5448faa664aa736074dccfe6e72b4a933f673d8ae954b0bb6`.
 
-The release's machine-readable build manifest identifies the exact source commit, local executable hash, toolchain and final archive check. It is published separately to avoid a self-referential source hash. SHA256SUMS covers the uploaded assets. Initial failed tests are retained locally rather than rewritten as successes.
-
-## Build, install and rollback
-
-Use [BUILD.md](BUILD.md) for local source builds and [RUNTIMES.md](RUNTIMES.md) for exact optional identities and discovery. Public source acquisition does not grant vendor runtime rights. Keep a working installation intact and deploy any local build into a separate writable folder. Copy no personal configuration into a distributed package. Rollback means closing the new app and opening the preserved old folder.
-
-The inherited update checker still points at upstream Veyra and opens upstream release pages; it is not a Console updater. Do not use an upstream package to overwrite this fork. Automated star-history commits are disabled in the fork; the workflow is manual-only.
-
-Next publication work is resolving the combined-binary distribution question or implementing a genuinely independent base player, then validating and publishing a Windows package. New rendering algorithms and more manual benchmarks are not prerequisites.
+Previous releases/tags remain available for source rollback. For local app rollback, close the new folder and open the preserved prior folder. No driver or display-mode change is needed.
