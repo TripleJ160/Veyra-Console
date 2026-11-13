@@ -23,6 +23,7 @@ int main(int argc,char** argv) {
     veyra::ui::QmlPlayerBridge bridge(engine,path);
 
             bridge.setPreference("autoResume",false);
+            check(bridge.setPreference("windowSize","center-video"),"center startup preference accepted");
             const auto settle=[](int ms){QElapsedTimer t;t.start();while(t.elapsed()<ms){QCoreApplication::processEvents();QThread::msleep(5);}};
             for(bool caption : {false,true}) {
                 bridge.setPreference("systemTitleBar",caption);
@@ -34,7 +35,9 @@ int main(int argc,char** argv) {
                 std::unique_ptr<QObject> ui(component.create());auto* w=ui?qobject_cast<QQuickWindow*>(ui.get()):nullptr;
                 if(!w)std::fprintf(stderr,"%s\n",qPrintable(component.errorString()));
                 check(w,"actual Main window creates");if(!w)continue;
-                ui->setProperty("page","min");settle(800);
+                settle(800);
+                check(ui->property("page").toString()=="min"&&std::abs(w->width()-w->height()*16.0/9)<1.1,"startup automatically selects centered cinema geometry");
+                ui->setProperty("page","min");
                 check(QMetaObject::invokeMethod(ui.get(),"prepareWindowResize"),"manual resize hands geometry to window manager");
                 const QSize manual(1000,std::min(900,w->screen()->availableGeometry().height()-100));
                 w->resize(manual);settle(850);
