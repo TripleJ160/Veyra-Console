@@ -35,3 +35,15 @@ Use the viewing preset **DLSS 2× — transport**, standard mode, Performance/Li
 - **Connected and gamepad present**: verify background forwarding or focus Veyra, check login-PIN status, and use Reconnect if the control session failed. Do not enable view-only Remote Play as the input route.
 
 Offline virtual-gamepad and encrypted-loopback checks validate software boundaries. A successful PS5 pairing, live Odin input, WAN delivery cadence and controller-to-photon latency remain user/hardware validation boundaries, not claimed test results.
+
+## Apollo application entry
+
+In Apollo's Applications page, add a **Veyra Console** app. Use the new package's **Veyra.exe** as the executable, with these arguments:
+
+```
+--data-dir "E:\veyra-5090\releases\Veyra-Console-2.2.0-Odin\profiles\Odin" --fullscreen
+```
+
+Use the actual package path if you move it. Set **Always use Virtual Display** for that app if available and grant the Odin client **Gamepad Input** permission. Launch this app from Artemis after completing PS5 registration. Close a local Veyra instance first so it does not occupy the capture card. Use the executable as Apollo's tracked application command; the desktop double-click launcher detaches, so its process exit would not represent the player's lifetime.
+
+The supplied **APOLLO APP COMMAND.txt** contains the complete command for the current local location. This is setup text, not an automatic Apollo configuration change.
