@@ -1,5 +1,7 @@
 module Veyra
 CaptureLegacyPicker 1.0 CaptureLegacyPicker.qml
+ScreenCropEditor 1.0 ScreenCropEditor.qml
+FullscreenTimingPanel 1.0 FullscreenTimingPanel.qml
 UpdateBanner 1.0 UpdateBanner.qml
 PlaylistWindow 1.0 PlaylistWindow.qml
 PlaybackRateButton 1.0 PlaybackRateButton.qml
@@ -10,6 +12,8 @@ VSubGroup 1.0 VSubGroup.qml
 DialogHost 1.0 DialogHost.qml
 StreamHud 1.0 StreamHud.qml
 VBackdrop 1.0 VBackdrop.qml
+VAccentFill 1.0 VAccentFill.qml
+DuskIntro 1.0 DuskIntro.qml
 VButton 1.0 VButton.qml
 VCard 1.0 VCard.qml
 VDot 1.0 VDot.qml
@@ -21,6 +25,7 @@ VH3 1.0 VH3.qml
 VIcon 1.0 VIcon.qml
 VPill 1.0 VPill.qml
 VRow 1.0 VRow.qml
+NvidiaVrrProfileRow 1.0 NvidiaVrrProfileRow.qml
 VSeg 1.0 VSeg.qml
 VSelect 1.0 VSelect.qml
 VSlider 1.0 VSlider.qml
@@ -40,6 +45,8 @@ ColourPanel 1.0 ColourPanel.qml
 VScrollBar 1.0 VScrollBar.qml
 VConfirm 1.0 VConfirm.qml
 NrLayerEditor 1.0 NrLayerEditor.qml
+MaskEditor 1.0 MaskEditor.qml
+DedupModeRow 1.0 DedupModeRow.qml
 NrWebPad 1.0 NrWebPad.qml
 SrStageEditor 1.0 SrStageEditor.qml
 AntiAliasEditor 1.0 AntiAliasEditor.qml
@@ -69,11 +76,14 @@ DialogNote 1.0 DialogNote.qml
 DialogTextField 1.0 DialogTextField.qml
 NetworkSourceDialog 1.0 NetworkSourceDialog.qml
 CaptureSourceDialog 1.0 CaptureSourceDialog.qml
+CaptureGuideDialog 1.0 CaptureGuideDialog.qml
+OnboardingGuide 1.0 OnboardingGuide.qml
 Ps5SourceDialog 1.0 Ps5SourceDialog.qml
 PcSourceDialog 1.0 PcSourceDialog.qml
 XboxSourceDialog 1.0 XboxSourceDialog.qml
 ScreenSourceDialog 1.0 ScreenSourceDialog.qml
 SubtitleSettingsDialog 1.0 SubtitleSettingsDialog.qml
+LiveTranslationDialog 1.0 LiveTranslationDialog.qml
 AudioSettingsDialog 1.0 AudioSettingsDialog.qml
 SavePresetDialog 1.0 SavePresetDialog.qml
 ManagePresetsDialog 1.0 ManagePresetsDialog.qml

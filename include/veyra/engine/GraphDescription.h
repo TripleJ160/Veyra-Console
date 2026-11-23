@@ -11,7 +11,7 @@ inline void describeNrLayers(const EnhancementSettings& settings,pipeline::Enhan
     desc.nrRuntime=settings.nrRuntime;
     desc.nrTemporal=settings.residual.correction.enabled?settings.residual.correction.usesHistory():settings.nrTemporal;
     desc.nrAntiFlicker=settings.residual.correction.enabled?NrAntiFlicker::Flow:settings.nrAntiFlicker;
-    desc.model=settings.model;desc.residual=settings.residual;desc.protection=settings.protection;
+    desc.model=settings.model;desc.residual=settings.residual;desc.protection=settings.protection;desc.exclusion=settings.exclusion;
     desc.nrHoldStrength=settings.nrHoldStrength;desc.nrHoldTolerance=settings.nrHoldTolerance;
     desc.nrReuse=settings.nr?settings.nrReuse:NrReuseMode::Off;
     desc.nrLayersModel.clear();desc.nrLayersResidual.clear();
@@ -180,13 +180,18 @@ inline pipeline::ResolutionPlan describeStages(const StageRequest& request,const
     // Custom: static HDR output tuning (present blit curve + display metadata).
     desc.hdrCurve=settings.hdrCurve;
     desc.hdrMetadata=settings.hdrMetadata;
+    // Custom: the Dolby Vision follow rides with the curve. Every graph build goes
+    // through this function, so without it a rebuild (source open, backend
+    // recovery) silently dropped the switch while the curve survived.
+    desc.doviFollow=settings.doviFollow;
+    desc.doviFollowAverage=settings.doviFollowAverage;
     desc.hdrOutputMode=settings.hdrOutputMode;
     desc.fgMotion=settings.fgMotion;desc.srMotion=settings.srMotion;desc.nrMotion=settings.nrMotion;
     desc.settingsRevision=settings.revision;
     desc.flowQuality=settings.flow;
     desc.contentRate=settings.content;
     desc.opticalFlowBackend=settings.opticalFlowBackend;
-    desc.amdFlowHalfResolution=settings.amdFlowHalfResolution;desc.fgMotionRefine=settings.fgMotionRefine;desc.dlssgLite=settings.dlssgLite;desc.vfgAutoRegulate=settings.vfgAutoRegulate;
+    desc.amdFlowHalfResolution=settings.amdFlowHalfResolution;desc.fgMotionRefine=settings.fgMotionRefine;desc.dlssgLite=settings.dlssgLite;desc.vfgAutoRegulate=settings.vfgAutoRegulate;desc.hudLock=settings.hudLock;
     desc.nrLayersExtent.clear();
     for(uint32_t i=0;i<chain.nodeCount;++i){
         auto& node=chain.nodes[i];

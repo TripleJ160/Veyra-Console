@@ -20,6 +20,8 @@ void EngineController::runLargeImage(HWND window,const sink::RgbaImage& original
     const uint32_t width=uint32_t(std::clamp(initialClient.right,1L,2048L)),height=uint32_t(std::clamp(initialClient.bottom,1L,2048L));
     pipeline::EnhanceGraphDesc previewDesc;previewDesc.sourceWidth=previewDesc.workWidth=width;previewDesc.sourceHeight=previewDesc.workHeight=height;
     previewDesc.rgbInput=true;previewDesc.stillImage=true;previewDesc.noFeatures=true;previewDesc.enableNr=false;previewDesc.enableFg=false;
+    // Same high-quality screen resampling as video (EngineController::run).
+    previewDesc.highQualityPresentation=GetEnvironmentVariableW(L"VEYRA_TEST_PRESENT_BILINEAR",nullptr,0)==0;
     pipeline::EnhanceGraph preview(ctx,ring);VideoPresenter presenter;
     struct Cleanup {
         gfx::CommandSlotRing& ring;VideoPresenter& presenter;pipeline::EnhanceGraph& graph;
@@ -66,7 +68,7 @@ void EngineController::runLargeImage(HWND window,const sink::RgbaImage& original
         }
         if(requested.revision!=applied.revision){
             pipeline::EnhanceGraphDesc desc;desc.enableNr=requested.nr;desc.nrRuntime=requested.nrRuntime;desc.noFeatures=!requested.nr;
-            desc.model=requested.model;desc.nrTemporal=requested.nrTemporal;desc.residual=requested.residual;desc.protection=requested.protection;desc.color=requested.color;desc.settingsRevision=requested.revision;
+            desc.model=requested.model;desc.nrTemporal=requested.nrTemporal;desc.residual=requested.residual;desc.protection=requested.protection;desc.exclusion=requested.exclusion;desc.color=requested.color;desc.settingsRevision=requested.revision;
             desc.additionalColors=requested.additionalColors;desc.additionalColorCount=requested.additionalColorCount;
             describeAntiAlias(requested,desc);
             desc.runtimeAbsPath=runtime::localRuntimeDirectory().wstring();

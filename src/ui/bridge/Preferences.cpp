@@ -2,6 +2,9 @@
 #include "../QmlPlayerBridge_p.h"
 #include <QWindow>
 #include <cmath>
+#include "veyra/ngx/AnrProvider.h"
+#include "veyra/gfx/AmfFrcBackend.h"
+#include "veyra/ui/UpdateChecker.h"
 
 namespace veyra::ui {
 // --- shell preferences -------------------------------------------------------
@@ -78,6 +81,13 @@ QVariantList QmlPlayerBridge::readComponentList() const {
     // Read from the runtime manifest the build produces rather than a list written
     // by hand here, so the page cannot claim a component the package lacks.
     QVariantList out;
+    const auto anrDirectory=ngx::AnrProvider::directory(runtime::localRuntimeDirectory().wstring());
+    out<<QVariantMap{{"name",QStringLiteral("ANR FG")},{"detail",QString::fromStdWString(anrDirectory)},
+        {"loaded",ngx::AnrProvider::available(runtime::localRuntimeDirectory().wstring())},{"experimental",true}};
+    // AMD FRC: the AMF runtime of the AMD driver, never shipped with Veyra.
+    wchar_t systemDirectory[MAX_PATH]{};GetSystemDirectoryW(systemDirectory,MAX_PATH);
+    out<<QVariantMap{{"name",QStringLiteral("AMD FRC (AMF)")},{"detail",QString::fromWCharArray(systemDirectory)+QStringLiteral("\\amfrt64.dll")},
+        {"loaded",gfx::AmfFrcBackend::runtimeInstalled()}};
     const auto vfgDirectory=pipeline::VfgBackend::runtimeDirectory(runtime::localRuntimeDirectory().wstring());
     const bool vfgAvailable=pipeline::VfgBackend::runtimeAvailable(runtime::localRuntimeDirectory().wstring());
     out<<QVariantMap{{"name",QStringLiteral("NVIDIA VFG")},{"detail",QString::fromStdWString(vfgDirectory)},
@@ -205,13 +215,21 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
         {"listInspectorWidth", {376, 4000}},
         // Network sources (#48): seconds to collect before the first picture; -1 follows the buffer level.
         {"networkPrebuffer", {-1, 60}},
+        {"networkTimeshift", {0, 600}},
         // Live recording: the target bitrate for the file, and the frame rate
         // cap (0 keeps the presented rate).
         {"recordBitrateMbps", {0, 400}},
-        {"recordFps", {0, 240}}};
-    static const QStringList flags{"systemTitleBar", "recordHevc", "recordAudio", "subtitleEnabled", "subtitleBackground", "subtitleFit",
-                                   "subtitleSecondLanguage", "audioForceStereo", "holdCompare",
-                                   "magewellLowLatency", "blackmagicNativeCapture", "captureShowAllFrameRates", "cinePillHidden", "exportStopsPlayback", "obsGameCapture", "autoResume", "fullscreenMemoryProtection", "prewarmEnhancement", "hdrFgCompatibility", "computeOnMonitorGpu", "deinterlace", "networkAutoReconnect"};
+        {"recordFps", {0, 240}},
+        {"recordSplitSeconds", {0, 86400}},
+        {"recordSplitMiB", {0, 1048576}},
+        {"virtualCameraFps", {0, 120}},
+        // Instant replay (#103): seconds the buffer keeps.
+        {"replaySeconds", {15, 600}}};
+    static const QStringList flags{"systemTitleBar", "recordHevc", "recordAudio", "recordMic", "recordMicTrack", "replayEnabled", "subtitleEnabled", "subtitleBackground", "subtitleFit",
+                                   "subtitleSecondLanguage", "audioForceStereo", "captureAudioMonitor", "holdCompare",
+                                   "magewellLowLatency", "blackmagicNativeCapture", "captureShowAllFrameRates", "cinePillHidden", "exportStopsPlayback", "obsGameCapture", "autoResume", "fullscreenMemoryProtection", "prewarmEnhancement", "hdrFgCompatibility", "computeOnMonitorGpu", "deinterlace", "networkAutoReconnect",
+                                   // 设置 → 外观 → 启动动画 / 启动音乐 / 剔除遮罩（2.1.9）
+                                   "introAnimation", "introMusic", "exclusionOverlay"};
     QVariant stored;
     if (ranges.contains(key)) {
         bool ok = false; const int n = value.toInt(&ok);
@@ -234,10 +252,20 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
         stored = dir;
     } else if (key == QLatin1String("audioDevice")) {
         stored = value.toString();
+    } else if (key == QLatin1String("recordMicDevice")) {
+        // A recording endpoint id (empty: the default recording device).
+        const QString id = value.toString();
+        if (id.size() > 512) return false;
+        stored = id;
     } else if (key == QLatin1String("sliderKeyStep")) {
         // Arrow-key step of a focused slider (设置 → 通用): 1, 0.1 or 0.01.
         bool ok = false; const double v = value.toDouble(&ok);
         if (!ok || !(qFuzzyCompare(v, 1.0) || qFuzzyCompare(v, 0.1) || qFuzzyCompare(v, 0.01))) return false;
+        stored = v;
+    } else if (key == QLatin1String("palette")) {
+        // 设置 → 外观 → 界面配色 (Theme.qml): 日落 or the original 经典 palette.
+        const QString v = value.toString();
+        if (v != QLatin1String("dusk") && v != QLatin1String("classic")) return false;
         stored = v;
     } else if (key == QLatin1String("accent")) {
         const QString v = value.toString();
@@ -282,9 +310,13 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
         stored = v;
     } else if (key == QLatin1String("rememberPosition") || key == QLatin1String("dockPinned")) {
         stored = value.toBool();
+    } else if (key == QLatin1String("updateDownloadRoute")) {
+        const auto name = value.toString();
+        if (!portable::parseDownloadRoute(name)) return false;
+        stored = name;
     } else if (key == QLatin1String("language")) {
         const QString v = value.toString();
-        static const QStringList languages{"auto", "zh-CN", "zh-TW", "en", "ja"};
+        static const QStringList languages{"auto", "zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "pt-BR", "ru"};
         if (!languages.contains(v)) return false;
         stored = v;
     } else if (key == QLatin1String("monitorGpu")) {
@@ -313,6 +345,18 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
     return true;
 }
 void QmlPlayerBridge::applyPreference(const QString& key) {
+    if (key == QLatin1String("updateDownloadRoute")) {
+        const auto route = portable::parseDownloadRoute(impl_->prefString("updateDownloadRoute"));
+        static_cast<UpdateChecker*>(updates_)->setDownloadRoute(route.value_or(portable::DownloadRoute::GitHub));
+        return;
+    }
+    if(key==QLatin1String("virtualCameraFps")&&virtualCameraEnabled())setVirtualCameraEnabled(true);
+    if(key==QLatin1String("captureAudioMonitor"))
+        impl_->engine.setCaptureAudioMonitoring(impl_->prefBool("captureAudioMonitor",true));
+    // The replay buffer re-arms with what a recording would use.
+    static const QStringList replayKeys{"replayEnabled", "replaySeconds", "recordBitrateMbps", "recordFps", "recordHevc",
+                                        "recordAudio", "recordMic", "recordMicDevice", "recordMicTrack"};
+    if (replayKeys.contains(key)) syncReplay();
     if(key==QLatin1String("hdrFgCompatibility")){
         impl_->presentation.hdrFgCompatibility=impl_->prefBool("hdrFgCompatibility",false);
         impl_->engine.requestPresentation(impl_->presentation);
@@ -324,9 +368,9 @@ void QmlPlayerBridge::applyPreference(const QString& key) {
     }
     if(key==QLatin1String("gpuPriority")){
         const auto value=impl_->prefString("gpuPriority");
-        // Unset means the default, 实时 (field request 2026-10-05).
+        // Unset means High (user default, 2026-11-13); saved choices stay explicit.
         gfx::requestGpuPriority(value==QLatin1String("normal")?gfx::GpuPriority::Normal:
-                                value==QLatin1String("high")?gfx::GpuPriority::High:gfx::GpuPriority::Realtime);
+                                value==QLatin1String("realtime")?gfx::GpuPriority::Realtime:gfx::GpuPriority::High);
     }
     if(key==QLatin1String("overlayCompat"))updateLiveCompanionCompat();
     if(key==QLatin1String("fullscreenMemoryProtection")){impl_->engine.setFullscreenMemoryProtection(impl_->prefBool("fullscreenMemoryProtection",false));emit snapshotChanged();}
@@ -478,7 +522,7 @@ namespace {
 const QVariantMap& shortcutDefaults() {
     // Screenshot was Ctrl+S before 2026-10-27; saved custom keys are kept.
     static const QVariantMap d{{"playPause", "Space"}, {"fullscreen", "F"}, {"lock", "Ctrl+L"},
-                               {"hold", "V"}, {"screenshot", "F7"}, {"record", "F8"}, {"toggleMode", "Tab"},
+                               {"hold", "V"}, {"screenshot", "F7"}, {"record", "F8"}, {"replay", "F9"}, {"toggleMode", "Tab"},
                                {"gamePanel", "Home"}, {"gameExit", "Ctrl+Alt+Home"}};
     return d;
 }
@@ -502,7 +546,7 @@ QVariantMap QmlPlayerBridge::shortcuts() const {
 void QmlPlayerBridge::applyGameHotkeys() {
     const auto keys = shortcuts();
     const auto key = [&keys](const char* action) { return ui::gameKey(QKeySequence(keys.value(action).toString(), QKeySequence::PortableText)); };
-    impl_->game.setHotkeys(key("gamePanel"), key("gameExit"), key("screenshot"), key("record"));
+    impl_->game.setHotkeys(key("gamePanel"), key("gameExit"), key("screenshot"), key("record"), key("replay"));
     // At start and after every change: a field log then says which key each
     // action answers to (the 2026-11-08 recording report had no way to tell).
     const auto custom = impl_->prefs.value("shortcuts").toMap();
@@ -591,12 +635,12 @@ bool QmlPlayerBridge::openSponsorLink(const QString& id) {
     // The author's pages as the author gave them (2026-10-19); the page shows buttons,
     // never these addresses.
     static constexpr std::pair<const char*, const char*> links[] = {
-        {"bilibili", "https://space.bilibili.com/19500532?spm_id_from=333.1007.0.0"},
         {"douyin", "https://v.douyin.com/9s06Bf2Inqc/"},
         {"x", "https://x.com/likely2002"},
         {"github", "https://github.com/Likely7"},
         {"youtube", "https://www.youtube.com/@Likely7Ai"},
-        {"kofi", "https://ko-fi.com/likely7"},
+        {"patreon", "https://www.patreon.com/cw/Likely7"},
+        {"patreonCoffee", "https://www.patreon.com/Likely7/posts/buy-me-coffee-175018110"},
     };
     for (const auto& [name, url] : links) {
         if (id != QLatin1StringView(name)) continue;
@@ -643,7 +687,9 @@ bool QmlPlayerBridge::eventFilter(QObject* watched, QEvent* event) {
             // Typing into a text field never compares.
             const QObject* focus = QGuiApplication::focusObject();
             const bool typing = focus && (focus->inherits("QQuickTextInput") || focus->inherits("QQuickTextEdit"));
-            if (!hold.isEmpty() && hold[0].toCombined() == pressed && !typing && impl_->prefBool("holdCompare", true)) {
+            // The walkthrough owns keyboard input, including custom hold-to-compare bindings.
+            const bool onboarding = watched->property("onboardingActive").toBool();
+            if (!hold.isEmpty() && hold[0].toCombined() == pressed && !typing && !onboarding && impl_->prefBool("holdCompare", true)) {
                 const bool down = type == QEvent::KeyPress;
                 if (down != impl_->holdKeyDown) { impl_->holdKeyDown = down; holdOriginal(down); }
                 return true;
@@ -850,8 +896,8 @@ QVariantList QmlPlayerBridge::exportTracks()const{
     for(const auto& track:item->info.tracks){const auto& selection=track.audio?item->media.audio:item->media.subtitles;
         const bool selected=selection.policy==engine::ExportTrackPolicy::All||selection.contains(track.index);
         result<<QVariantMap{{"index",track.index},{"audio",track.audio},{"selected",selected},{"compatible",track.compatible},
-            {"label",QStringLiteral("%1 · %2 · %3%4").arg(track.index).arg(utf8Of(track.codec)).arg(utf8Of(track.language)).arg(track.channels?QStringLiteral(" · %1 声道").arg(track.channels):QString())},
-            {"title",utf8Of(track.title)},{"action",utf8Of(track.action)}};
+            {"label",QStringLiteral("%1 · %2 · %3%4").arg(track.index).arg(utf8Of(track.codec)).arg(utf8Of(track.language)).arg(track.channels?tr(" · %1 声道").arg(track.channels):QString())},
+            {"title",utf8Of(track.title)},{"action",uiText(track.action)}};
     }
     return result;
 }

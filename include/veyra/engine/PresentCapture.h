@@ -19,14 +19,36 @@ public:
         uint32_t hdrMode=0;              // 0 SDR, 1 scRGB (linear BT.709), 2 HDR10 (PQ BT.2020)
         float ditherStep=0;              // graph output dither step (RgbToNv12 reserved.y)
         bool generated=false;
+        uint32_t nativeWidth=0,nativeHeight=0; // Source extent, independent of real-time internal resolution.
+        bool highQuality=false;
     };
     virtual ~PresentCapture()=default;
+    virtual bool needsFrame() const {return false;}
     // true: commands were recorded into `list`; submitted() or discarded() follows.
     virtual bool record(ID3D12GraphicsCommandList* list,const Frame& frame)=0;
     // The list was submitted; this fence point covers the recorded commands.
     virtual void submitted(ID3D12Fence* fence,uint64_t value)=0;
     // The list was not submitted (failed present); nothing will execute.
     virtual void discarded()=0;
+};
+
+// The presenter has one capture; a recording and the instant replay buffer
+// both take the presented frame through this.
+class PresentCaptureFanout final : public PresentCapture {
+public:
+    PresentCaptureFanout(PresentCapture& first,PresentCapture& second):first_(first),second_(second){}
+    bool needsFrame()const override{return first_.needsFrame()||second_.needsFrame();}
+    bool record(ID3D12GraphicsCommandList* list,const Frame& frame) override {
+        const bool a=first_.record(list,frame);
+        const bool b=second_.record(list,frame);
+        return a||b;
+    }
+    // Each one acts only on what it recorded itself.
+    void submitted(ID3D12Fence* fence,uint64_t value) override {first_.submitted(fence,value);second_.submitted(fence,value);}
+    void discarded() override {first_.discarded();second_.discarded();}
+private:
+    PresentCapture& first_;
+    PresentCapture& second_;
 };
 
 } // namespace veyra::engine

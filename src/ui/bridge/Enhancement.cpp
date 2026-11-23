@@ -1,5 +1,6 @@
 // QML bridge: Enhancement responsibilities.
 #include "../QmlPlayerBridge_p.h"
+#include "veyra/sink/AudioGain.h"
 #include <optional>
 
 namespace veyra::ui {
@@ -209,7 +210,7 @@ QVariantMap QmlPlayerBridge::hdrDisplayInfo()const{
     std::optional<engine::DisplayState> known;
     if(window){displays.request(window,"ui");known=displays.state(displays.monitorOf(window));}
     const engine::DisplayColorState c=known?known->color:engine::DisplayColorState{};
-    return {{"valid",c.peakValid},{"plausible",c.peakValid},{"peakNits",int(c.peakNits)},
+    return {{"valid",c.peakValid},{"plausible",c.peakPlausible},{"peakNits",int(c.peakNits)},
             {"fullFrameNits",int(c.fullFrameNits)},{"minNits",c.minNits}};
 }
 bool QmlPlayerBridge::hdrCurve()const{return settings().hdrCurve.enabled;}
@@ -430,9 +431,13 @@ void QmlPlayerBridge::syncHdrTitleProfile(){
 
 bool QmlPlayerBridge::loadHdrTitleProfile(const QString& title){
   const auto list=impl_->prefs.value(QStringLiteral("hdrTitles")).toList();
+  // Path separators must not decide whether a memory matches: canonicalFilePath()
+  // hands back '/', while entries written by older builds stored '\'.
+  const auto normalized=[](QString v){v.replace(QLatin1Char('\\'),QLatin1Char('/'));return v;};
+  const QString wanted=normalized(title);
   for(const auto& item:list){
     const auto stored=item.toMap();
-    if(stored.value(QStringLiteral("key")).toString()!=title)continue;
+    if(normalized(stored.value(QStringLiteral("key")).toString())!=wanted)continue;
     auto s=settings();
     const auto number=[&](const char* key,int fallback){
       return stored.contains(QLatin1String(key))?stored.value(QLatin1String(key)).toInt():fallback;};
@@ -444,6 +449,10 @@ bool QmlPlayerBridge::loadHdrTitleProfile(const QString& title){
     s.hdrCurve.rollOffPercent=unsigned(std::clamp(number("rollOffPercent",int(s.hdrCurve.rollOffPercent)),10,200));
     s.hdrCurve.peakCapNits=unsigned(std::clamp(number("peakCapNits",int(s.hdrCurve.peakCapNits)),0,4000));
     s.hdrCurve.strengthPercent=unsigned(std::clamp(number("strengthPercent",int(s.hdrCurve.strengthPercent)),0,200));
+    // Custom: the Dolby Vision follow belongs to the same per-film look, so it is
+    // remembered with it. Entries written before it existed keep the current value.
+    s.doviFollow=stored.value(QStringLiteral("doviFollow"),s.doviFollow).toBool();
+    s.doviP7Compose=stored.value(QStringLiteral("doviP7Compose"),s.doviP7Compose).toBool();
     QScopedValueRollback<bool> restoring(impl_->hdrRestoring,true);
     return commitHdrTuning(std::move(s));
   }
@@ -464,10 +473,14 @@ bool QmlPlayerBridge::storeHdrTitleProfile(const QString& title){
   entry[QStringLiteral("rollOffPercent")]=int(c.rollOffPercent);
   entry[QStringLiteral("peakCapNits")]=int(c.peakCapNits);
   entry[QStringLiteral("strengthPercent")]=int(c.strengthPercent);
+  entry[QStringLiteral("doviFollow")]=doviFollow();
+  entry[QStringLiteral("doviP7Compose")]=doviP7Compose();
   auto list=i.prefs.value(QStringLiteral("hdrTitles")).toList();
-  for(const auto& item:list)if(item.toMap().value(QStringLiteral("key")).toString()==title&&item.toMap()==entry)return false;
+  const auto normalized=[](QString v){v.replace(QLatin1Char('\\'),QLatin1Char('/'));return v;};
+  const QString wanted=normalized(title);
+  for(const auto& item:list)if(normalized(item.toMap().value(QStringLiteral("key")).toString())==wanted&&item.toMap()==entry)return false;
   for(int n=list.size()-1;n>=0;--n)
-    if(list[n].toMap().value(QStringLiteral("key")).toString()==title)list.removeAt(n);
+    if(normalized(list[n].toMap().value(QStringLiteral("key")).toString())==wanted)list.removeAt(n);
   list.append(entry);
   // Bounded list: the oldest titles fall off the front.
   while(list.size()>i.kHdrTitleProfileLimit)list.removeFirst();
@@ -575,7 +588,12 @@ QVariantMap QmlPlayerBridge::hdrSourceInfo() const {
   const unsigned cll=snap.sourceMaxCllNits,fall=snap.sourceMaxFallNits;
   const bool valid=snap.sourceHdr&&(mastering||cll||fall);
   return {{"valid",valid},{"masteringPeakNits",int(mastering)},
-          {"maxCllNits",int(cll)},{"maxFallNits",int(fall)}};
+          {"maxCllNits",int(cll)},{"maxFallNits",int(fall)},
+          {"doviProfile",int(snap.sourceDoviProfile)},
+          {"doviRpu",snap.sourceDoviRpu},
+          {"doviMaxNits",int(snap.sourceDoviMaxNits)},
+          {"doviEnhancement",snap.sourceDoviEnhancement},
+          {"hdr10Plus",snap.sourceHdr10Plus}};
 }
 
 bool QmlPlayerBridge::sourceIsSdr() const {
@@ -1117,7 +1135,7 @@ int QmlPlayerBridge::fgMultiplier() const {
 }
 void QmlPlayerBridge::setFgMultiplier(int multiplier) {
     const auto choices=settings().frameGenerationBackend==engine::FrameGenerationBackend::Vfg?
-        std::span<const uint32_t>(engine::kVfgMultiplierChoices):std::span<const uint32_t>(engine::kFgMultiplierChoices);
+        std::span<const uint32_t>(engine::kVfgMultiplierChoices):settings().frameGenerationBackend==engine::FrameGenerationBackend::Anr?std::span<const uint32_t>(engine::kAnrMultiplierChoices):std::span<const uint32_t>(engine::kFgMultiplierChoices);
     const bool legal = std::find(choices.begin(),choices.end(),uint32_t(std::max(multiplier,0)))!=choices.end();
     if (!legal || multiplier > fgMaxMultiplier()) {
         emit notice(tr("补帧倍率超出当前后端范围"), true); return;
@@ -1142,30 +1160,11 @@ void QmlPlayerBridge::setColorEnabled(bool enabled){
     auto c=selectedColourSettings();c.enabled=enabled;commitColour(c);
 }
 
-bool QmlPlayerBridge::protectionEnabled() const { return settings().protection.enabled; }
-void QmlPlayerBridge::setProtectionEnabled(bool enabled) {
-    if (impl_->chain.mode != engine::ChainMode::List) {
-        emit notice(tr("NR 保护区域仅在列表模式可用"), true); return;
-    }
-    for (uint32_t i=0; i<impl_->chain.nodeCount; ++i) {
-        if (impl_->chain.nodes[i].type==engine::EffectType::Protection) {
-            setEffectEnabled(int(i), enabled);
-            return;
-        }
-    }
-    emit notice(tr("处理链中没有 NR 保护节点，未更改设置"), true);
-}
-
-QVariantMap QmlPlayerBridge::protectionState() const {
-    const auto p = settings().protection;
-    const auto r = p.regions[0];
-    return {{"left",double(r.left)},{"top",double(r.top)},
-            {"right",double(r.right)},{"bottom",double(r.bottom)},
-            {"feather",double(p.featherPixels)}};
-}
+bool QmlPlayerBridge::protectionEnabled() const {return maskState(false).value("enabled").toBool();}
+void QmlPlayerBridge::setProtectionEnabled(bool enabled) {setMaskEnabled(false,enabled);}
+QVariantMap QmlPlayerBridge::protectionState() const {return maskState(false);}
 
 bool QmlPlayerBridge::setProtectionRegion(double left,double top,double right,double bottom,double feather) {
-    if (impl_->chain.mode != engine::ChainMode::List) return false;
     for (double v : {left,top,right,bottom,feather}) if (!std::isfinite(v)) return false;
     if (left<0 || top<0 || right>1 || bottom>1 || left>right || top>bottom || feather<0 || feather>64) return false;
     for (uint32_t i=0;i<impl_->chain.nodeCount;++i) {
@@ -1230,23 +1229,36 @@ void QmlPlayerBridge::setLowLatency(bool value){
     emit settingsChanged();emitChainChanged();
 }
 
-// Stage-5 output stabiliser (anti-flicker). Global, not per-node: it runs once,
-// after the whole NR stack and the residual composite. Strength 0 is the
+// Stage-5 output stabiliser (anti-flicker). One independent node controls the
+// existing pass after the whole NR stack and residual composite. Strength 0 is the
 // default and the graph then skips the dispatch entirely, so committing it
 // never costs anything until the user turns it on.
 double QmlPlayerBridge::nrHoldStrength() const { return double(settings().nrHoldStrength); }
 void QmlPlayerBridge::setNrHoldStrength(double value) {
-    auto s = settings();
-    const float next = float(value);
-    if (s.nrHoldStrength == next) return;
-    s.nrHoldStrength = next;
-    if (!impl_->commit(std::move(s))) return;
-    impl_->prefs[QStringLiteral("nrHoldStrength")] = double(next);
-    if (!impl_->savePrefs()) veyra::log::warn("ui-prefs", "output stabiliser strength not saved");
+    if(!std::isfinite(value)||value<0||value>1)return;
+    auto* node=impl_->chain.firstOf(engine::EffectType::NrStabilizer);
+    if(!node){
+        if(value==0)return;
+        const int index=addEffect(QStringLiteral("nr-stabilizer"));
+        if(index<0)return;
+        node=&impl_->chain.nodes[uint32_t(index)];
+    }
+    const auto previous=*node;
+    const bool wasValid=chainValid();
+    node->enabled=value>0;
+    if(value>0)node->holdStrength=float(value);
+    if(!impl_->revalidate(true)){
+        const auto error=impl_->validation.message;*node=previous;impl_->revalidate();
+        emit notice(uiText(error),true);return;
+    }
+    impl_->prefs[QStringLiteral("nrHoldStrength")]=value;
+    if(!impl_->savePrefs())veyra::log::warn("ui-prefs","output stabiliser strength not saved");
     emit settingsChanged();
+    if(previous.enabled!=node->enabled)emitChainChanged();
+    else emitParameterChanged(&QmlPlayerBridge::nrStabilizerChanged,wasValid);
 }
 // NR inference reuse (pipeline/NrReuse.h), realtime preview only. 0 off,
-// 1 Auto, 2/3/4 reuse one frame in every 2/3/4. Global like the stabiliser.
+// 1 Auto, 2/3/4 reuse one frame in every 2/3/4. Its existing list-only admission stays.
 int QmlPlayerBridge::nrReuseMode() const { return int(settings().nrReuse); }
 void QmlPlayerBridge::setNrReuseMode(int value) {
     const auto mode = static_cast<engine::NrReuseMode>(value);
@@ -1261,13 +1273,17 @@ void QmlPlayerBridge::setNrReuseMode(int value) {
 }
 double QmlPlayerBridge::nrHoldTolerance() const { return double(settings().nrHoldTolerance); }
 void QmlPlayerBridge::setNrHoldTolerance(double value) {
-    auto s = settings();
-    const float next = float(value);
-    if (s.nrHoldTolerance == next) return;
-    s.nrHoldTolerance = next;
-    if (!impl_->commit(std::move(s))) return;
-    impl_->prefs[QStringLiteral("nrHoldTolerance")] = double(next);
-    if (!impl_->savePrefs()) veyra::log::warn("ui-prefs", "output stabiliser tolerance not saved");
+    if(!std::isfinite(value)||value<0||value>1)return;
+    auto* node=impl_->chain.firstOf(engine::EffectType::NrStabilizer);
+    if(node){
+        const int index=int(node-impl_->chain.nodes.data());
+        if(!setStabilizerParameter(index,QStringLiteral("tolerance"),value))return;
+    }else{
+        auto settings=this->settings();settings.nrHoldTolerance=float(value);
+        if(!impl_->commit(settings))return;
+    }
+    impl_->prefs[QStringLiteral("nrHoldTolerance")]=value;
+    if(!impl_->savePrefs())veyra::log::warn("ui-prefs","output stabiliser tolerance not saved");
     emit settingsChanged();
 }
 
@@ -1277,10 +1293,13 @@ bool QmlPlayerBridge::applying() const { return impl_->facade.applying(); }
 // straight to the engine and come back through the snapshot: the UI shows what
 // the engine did, not what it asked for.
 double QmlPlayerBridge::volume() const { return double(impl_->snapshot.volume); }
+double QmlPlayerBridge::maximumVolume() const { return sink::kMaxAudioGain; }
 void QmlPlayerBridge::setVolume(double value) {
     if (!std::isfinite(value)) return;
-    const double volume = std::clamp(value, 0.0, 1.0);
+    const double volume = std::clamp(value, 0.0, double(sink::kMaxAudioGain));
     impl_->engine.setVolume(float(volume), impl_->snapshot.muted);
+    impl_->snapshot.volume=float(volume);
+    emit snapshotChanged();
     // Kept for the next launch (user 2026-11-08). A slider drag calls this for
     // every move, so the file is written 0.5 s after the last change and on exit.
     const QString key = QStringLiteral("volume");
@@ -1290,7 +1309,12 @@ void QmlPlayerBridge::setVolume(double value) {
 }
 bool QmlPlayerBridge::muted() const { return impl_->snapshot.muted; }
 void QmlPlayerBridge::setMuted(bool value) {
+    if(value==impl_->snapshot.muted)return;
     impl_->engine.setVolume(impl_->snapshot.volume, value);
+    impl_->snapshot.muted=value;
+    impl_->prefs[QStringLiteral("audioMuted")]=value;
+    if(impl_->volumeSaveTimer)impl_->volumeSaveTimer->start();
+    emit snapshotChanged();
 }
 double QmlPlayerBridge::playbackSpeed() const { return impl_->snapshot.playbackSpeed; }
 double QmlPlayerBridge::playbackRate() const { return impl_->snapshot.playbackRate; }

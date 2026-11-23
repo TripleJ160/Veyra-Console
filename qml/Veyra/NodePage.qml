@@ -41,8 +41,12 @@ VPage {
     signal videoHeightEdited(real height)
     // The status summary can wrap and the transport gains a row on narrow
     // windows. The native video host must use this same responsive geometry.
+    readonly property bool shortLayout: height < 400
+    readonly property real minimumVideoCardHeight: shortLayout ? statsBar.height + 44 : 180
+    readonly property real maximumVideoCardHeight:
+        Math.max(minimumVideoCardHeight, height - 28 - 10 - (shortLayout ? 110 : 200))
     readonly property real videoCardHeight: Math.max(statsBar.height + 1,
-        Math.min(root.videoHeight, Math.max(180, root.height - 28 - 10 - 200)))
+        Math.min(root.videoHeight, maximumVideoCardHeight))
     readonly property rect videoViewport: Qt.rect(14, 14, Math.max(1, root.width - 28),
         Math.max(1, root.videoCardHeight - statsBar.height))
     // Where a node picked from the add menu lands (world coordinates).
@@ -84,8 +88,10 @@ VPage {
         case "beauty": return "#FF8FBF"
         case "nr": return "#FF8A3D"
         case "protection": return "#8A8A96"
+        case "nr-stabilizer": return "#5DCCA1"
+        case "exclusion": return "#E7B868"
         case "video-hdr": return "#FFB547"
-        case "frame-generation": case "dlss-fg": case "xess-fg": case "fsr3-fg": case "fsr4-fg": case "vfg-fg": return "#3DDC84"
+        case "frame-generation": case "dlss-fg": case "xess-fg": case "fsr3-fg": case "fsr4-fg": case "vfg-fg": case "anr-fg": case "amdfrc-fg": return "#3DDC84"
         }
         return "#55555C"
     }
@@ -405,12 +411,13 @@ VPage {
             // .nv-bar: transport, then the stats strip.
             Rectangle {
                 id: statsBar
+                readonly property bool tight: width < 800
                 readonly property bool compact: width < nodeSourceBtn.implicitWidth + nodePresetBtn.implicitWidth
                     + nodeModeSwitch.implicitWidth + nodeOrbs.implicitWidth + 3 * 32 + 32 + 8 * 8 + 360
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
-                height: (compact ? 72 : 40) + nodeStatus.implicitHeight + 8
+                height: root.shortLayout ? 40 : (compact ? 72 : 40) + nodeStatus.implicitHeight + 8
                 color: Theme.card
 
                 GridLayout {
@@ -449,6 +456,7 @@ VPage {
                     // .nv-stats: each entry separated by a hairline, mono numbers.
                     Flickable {
                         objectName: "node-stats-scroll"
+                        visible: !root.shortLayout
                         Layout.row: statsBar.compact ? 1 : 0
                         Layout.column: statsBar.compact ? 0 : 4
                         Layout.columnSpan: statsBar.compact ? 8 : 1
@@ -506,7 +514,16 @@ VPage {
                     }
 
                     // Total time / GPU / output-vs-target orbs (replace "已测增强 P95").
-                    ProPage.PerfOrbs { id: nodeOrbs; Layout.row: 0; Layout.column: statsBar.compact ? 4 : 5; objectName: "node-perf-orbs"; size: 32; showLabels: false; spacing: 6 }
+                    ProPage.PerfOrbs {
+                        id: nodeOrbs
+                        objectName: "node-perf-orbs"
+                        visible: !root.shortLayout && !statsBar.tight
+                        Layout.row: 0
+                        Layout.column: statsBar.compact ? 4 : 5
+                        size: 32
+                        showLabels: false
+                        spacing: 6
+                    }
                     VButton {
                         Layout.row: 0; Layout.column: statsBar.compact ? 5 : 6
                         objectName: "node-fullscreen"
@@ -533,12 +550,14 @@ VPage {
                         objectName: "node-preset-button"
                         iconName: "nodes"
                         trailingIcon: "down"
-                        maxTextWidth: 150
+                        maxTextWidth: statsBar.tight ? 90 : 150
                         text: qsTr("节点预设：") + veyra.currentPresetName
+                        tip: text
                         onClicked: nodePresetMenu.openAt(this, "down")
                     }
                     ProPage.StatusSummary {
                         id: nodeStatus
+                        visible: !root.shortLayout
                         Layout.row: statsBar.compact ? 2 : 1
                         Layout.column: 0
                         Layout.columnSpan: statsBar.compact ? 8 : 9
@@ -572,8 +591,8 @@ VPage {
                 property real origin: 0
                 onActiveChanged: if (active) origin = root.videoHeight
                 onActiveTranslationChanged: if (active) {
-                    const most = Math.max(180, root.height - 28 - 10 - 200)
-                    root.videoHeightEdited(Math.round(Math.max(180, Math.min(most, origin + activeTranslation.y))))
+                    const height = Math.min(root.maximumVideoCardHeight, origin + activeTranslation.y)
+                    root.videoHeightEdited(Math.round(Math.max(root.minimumVideoCardHeight, height)))
                 }
             }
         }
@@ -581,13 +600,14 @@ VPage {
         // --- canvas --------------------------------------------------------
         Rectangle {
             id: canvasCard
+            objectName: "node-canvas"
             // Over the fullscreen picture the canvas is a cover like any panel.
             readonly property bool videoCover: root.overlay
             property real coverRadius: radius
             Layout.fillWidth: true
             Layout.fillHeight: true
             radius: Theme.rCard
-            color: "#0A0A0D"
+            color: Theme.shade(10, 10, 13)
             border.width: 1
             border.color: Theme.stroke
             clip: true
@@ -658,7 +678,7 @@ VPage {
                         const a = root.endpoint(edge.from, true), b = root.endpoint(edge.to, false)
                         if (!a || !b) continue
                         const hot = edge.from === root.hotFrom && edge.to === root.hotTo
-                        ctx.strokeStyle = hot ? "#FF8A3D" : "#8291AA"; ctx.lineWidth = (hot ? 4 : 2) / root.zoom
+                        ctx.strokeStyle = hot ? (Theme.dusk ? Theme.accent : "#FF8A3D") : "#8291AA"; ctx.lineWidth = (hot ? 4 : 2) / root.zoom
                         curve(a, b)
                     }
                     // Rubber band from the chosen output port to the pointer.
@@ -666,7 +686,7 @@ VPage {
                         const a = root.endpoint(root.wireFrom, true)
                         if (a) {
                             ctx.setLineDash([6 / root.zoom, 4 / root.zoom])
-                            ctx.strokeStyle = "#FF8A3D"; ctx.lineWidth = 2 / root.zoom
+                            ctx.strokeStyle = Theme.dusk ? Theme.accent : "#FF8A3D"; ctx.lineWidth = 2 / root.zoom
                             curve(a, root.pointerWorld)
                             ctx.setLineDash([])
                         }
@@ -712,7 +732,7 @@ VPage {
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                            NodeLabel { Layout.fillWidth: true; text: qsTr("边缘神盾（XeSS 防果冻）") }
+                            NodeLabel { Layout.fillWidth: true; text: qsTr("边缘神盾（防果冻）") }
                             VSwitch { objectName: "node-edge-aegis"; checked: veyra.edgeAegis; onToggled: checked => veyra.edgeAegis = checked }
                         }
                         NodeLabel { text: qsTr("运动估算质量") }
@@ -729,15 +749,7 @@ VPage {
                             NodeLabel { Layout.fillWidth: true; text: qsTr("AMD 性能档（宽高减半）") }
                             VSwitch { objectName: "node-amd-half"; checked: veyra.amdFlowHalf; onToggled: checked => veyra.amdFlowHalf = checked }
                         }
-                        NodeLabel { text: qsTr("内容节奏") }
-                        VSelect {
-                            objectName: "node-content-rate"
-                            Layout.fillWidth: true
-                            title: qsTr("内容节奏")
-                            options: root.contentRates
-                            value: (root.contentRates[veyra.contentRate] || root.contentRates[0]).label
-                            onPicked: id => veyra.contentRate = Number(id)
-                        }
+                        DedupModeRow { backend: veyra; namePrefix: "node"; showHelp: false }
                         Text {
                             Layout.fillWidth: true
                             text: qsTr("补帧与 NR 共用，输入后计算一次，不随节点重复。")
@@ -785,7 +797,8 @@ VPage {
                                 id: nodeVolume
                                 objectName: "node-out-volume"
                                 Layout.fillWidth: true
-                                from: 0; to: 1; value: veyra.volume; inputScale: 100
+                                from: 0; to: veyra.maximumVolume; value: veyra.volume; inputScale: 100
+                                valueFromModel: true; defaultValue: 1
                                 onMoved: value => veyra.volume = value
                             }
                             VSliderValue { slider: nodeVolume; text: Math.round(veyra.volume * 100) + "%"; color: Theme.t2; pixelSize: 10 }
@@ -887,31 +900,7 @@ VPage {
                             options: veyra.audioDevices
                             onPicked: id => veyra.setPreference("audioDevice", id)
                         }
-                        // The list page's 输出稳定器 · 抗闪烁 (field request 2026-10-01: missing
-                        // in node mode). One global stage after the last NR, before SR and FG.
-                        NodeLabel { text: qsTr("输出稳定器 · 抗闪烁") }
-                        RowLayout {
-                            Layout.fillWidth: true; spacing: 6
-                            VSwitch {
-                                objectName: "node-out-stabiliser"
-                                checked: veyra.nrHoldStrength > 0
-                                onToggled: checked => veyra.nrHoldStrength = checked ? 0.8 : 0
-                            }
-                            VSlider {
-                                id: nodeHoldStrength
-                                objectName: "node-out-hold-strength"
-                                Layout.fillWidth: true
-                                visible: veyra.nrHoldStrength > 0
-                                from: 0.1; to: 1.0; value: veyra.nrHoldStrength; inputScale: 100
-                                onMoved: value => veyra.nrHoldStrength = value
-                            }
-                            VSliderValue {
-                                visible: veyra.nrHoldStrength > 0
-                                slider: nodeHoldStrength
-                                text: Math.round(veyra.nrHoldStrength * 100) + "%"
-                                color: Theme.t2; pixelSize: 10
-                            }
-                        }
+
                     }
                 }
             }
@@ -1017,12 +1006,12 @@ VPage {
                 objectName: "node-canvas-tools"
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.bottom: parent.bottom
-                anchors.bottomMargin: 12 + 16 + 8
+                anchors.bottomMargin: root.shortLayout && !root.overlay ? 8 : 36
                 z: 4
                 width: toolsRow.implicitWidth + 8
                 height: toolsRow.implicitHeight + 8
                 radius: 12
-                color: Qt.rgba(20 / 255, 20 / 255, 24 / 255, 0.94)
+                color: Theme.shade(20, 20, 24, 0.94)
                 border.width: 1
                 border.color: Theme.stroke2
                 RowLayout {
@@ -1073,8 +1062,8 @@ VPage {
                 anchors.margins: 12
                 height: 18
                 radius: 5
-                color: Qt.rgba(10 / 255, 10 / 255, 13 / 255, 0.85)
-                visible: segments.length > 0
+                color: Theme.shade(10, 10, 13, 0.85)
+                visible: segments.length > 0 && (!root.shortLayout || root.overlay)
                 readonly property var hues: ({ sr: "#6EA8FF", nr: "#FF8A3D", color: "#A8A8B8", "video-hdr": "#E58BD9", aa: "#7FD4FF",
                                                "frame-generation": "#3DDC84", protection: "#E7B868" })
                 readonly property var segments: {
@@ -1170,12 +1159,6 @@ VPage {
         font.family: Theme.fontUi
         font.pixelSize: 10
     }
-    // engine::ContentRate order (same list as the professional page).
-    readonly property var contentRates: [
-        { id: "0", label: qsTr("采用源时间戳") }, { id: "1", label: qsTr("自动剔除重复帧") },
-        { id: "2", label: qsTr("识别 30fps 内容") }, { id: "3", label: qsTr("识别 50fps 内容") },
-        { id: "4", label: qsTr("识别 60fps 内容") }, { id: "5", label: qsTr("采集 60→30（PS5 30 帧）") }
-    ]
     // A draggable fixed box (输入 / 光流 / 输出). The top strip (or the whole box
     // when it has no controls) is the drag handle.
     component AnchorBox: Rectangle {
@@ -1191,7 +1174,7 @@ VPage {
         onXChanged: wires.requestPaint()
         onYChanged: wires.requestPaint()
         radius: 10
-        color: "#1D1D22"
+        color: Theme.shade(29, 29, 34)
         border.width: 1
         border.color: Theme.stroke2
         Item {
@@ -1243,10 +1226,10 @@ VPage {
         onHeightChanged: { wires.requestPaint(); if (!headDrag.active) settleTimer.restart() }
         onWidthChanged: settleTimer.restart()
         z: root.selectedId === node.id ? 3 : (headDrag.active ? 4 : 1)
-        width: node.type === "color" ? 360 : node.type === "nr" ? 320 : 272
+        width: node.type === "color" ? 360 : ["nr", "protection", "exclusion"].indexOf(node.type)>=0 ? 320 : 272
         height: body.implicitHeight
         radius: 10
-        color: "#1D1D22"
+        color: Theme.shade(29, 29, 34)
         opacity: (node.enabled ? 1 : 0.74) * lifeOpacity
         property real lifeScale: 1
         property real lifeOpacity: 1
@@ -1484,6 +1467,9 @@ VPage {
                                : card.node.type === "aa" ? aaEditor
                                : card.node.type === "beauty" ? beautyEditor
                                : card.node.type === "video-hdr" ? hdrEditor
+                               : card.node.type === "protection" ? protectionEditor
+                               : card.node.type === "exclusion" ? exclusionEditor
+                               : card.node.type === "nr-stabilizer" ? stabilizerEditor
                                : card.node.type === "frame-generation" ? fgEditor : null
             }
             Item { implicitHeight: card.collapsed ? 0 : 4 }
@@ -1497,6 +1483,49 @@ VPage {
                 layerData: card.nr || ({index: card.node.index, sizePolicy: 0, intensity: 0, tone: 0, structure: 0, skin: -1, style: 0, autoMask: false, uiCorrection: false, total: 0, darken: 0, brighten: 0, color: 0, luminance: 0, temporal: false})
                 layerCount: veyra.nrLayers.length
                 onEdited: (i, k, v) => veyra.setNrLayerParameter(i, k, v)
+            }
+        }
+        Component {
+            id: protectionEditor
+            MaskEditor { namePrefix: "node-protection" }
+        }
+        Component {
+            id: exclusionEditor
+            MaskEditor { allEffects: true; namePrefix: "node-exclusion" }
+        }
+        Component {
+            id: stabilizerEditor
+            ColumnLayout {
+                Layout.fillWidth: true
+                NodeLabel {
+                    Layout.fillWidth: true
+                    text: qsTr("在最后一层 NR 之后稳住未变化的像素。")
+                    wrapMode: Text.WordWrap
+                }
+                VRow {
+                    label: qsTr("稳定强度")
+                    value: Math.round(veyra.nrStabilizerState.strength*100)+"%"
+                    VSlider {
+                        objectName: "node-hold-strength"
+                        implicitWidth: 110
+                        valueFromModel: true
+                        from: 0.1; to: 1; inputScale: 100
+                        value: veyra.nrStabilizerState.strength
+                        onMoved: value=>veyra.setStabilizerParameter(card.node.index,"strength",value)
+                    }
+                }
+                VRow {
+                    label: qsTr("变化容差")
+                    value: (veyra.nrStabilizerState.tolerance*100).toFixed(1)+"%"
+                    VSlider {
+                        objectName: "node-hold-tolerance"
+                        implicitWidth: 110
+                        valueFromModel: true
+                        from: 0; to: 1; inputScale: 100
+                        value: veyra.nrStabilizerState.tolerance
+                        onMoved: value=>veyra.setStabilizerParameter(card.node.index,"tolerance",value)
+                    }
+                }
             }
         }
         Component {
@@ -1608,12 +1637,14 @@ VPage {
                     VSelect {
                         objectName: "node-fg-backend"
                         options: veyra.fgBackendChoices
-                        value: (options.find(o => o.id === veyra.fgBackendName) || options[0]).label
+                        value: (options.find(o => o.id === veyra.fgBackendName) || options[0] || {}).label || ""
+                        displayValue: Support.fgBackendShortLabel(selectedOption) || value
                         onPicked: id => veyra.fgBackendName = id
                     }
                 }
                 VRow {
                     label: qsTr("倍率")
+                    // 档位与作者原版一致（只有数字档）；自动选择由下方独立开关控制。
                     hint: veyra.fgDisplayHint.length > 0 ? veyra.fgDisplayHint : veyra.fgMaxMultiplier + qsTr("X 为上限")
                     hintColor: veyra.fgDisplayHint.length > 0 ? Theme.warn : Theme.t3
                     VSeg {
@@ -1659,6 +1690,24 @@ VPage {
                     VSwitch { objectName: "node-vfg-auto-regulate"; checked: veyra.vfgAutoRegulate; onToggled: checked => veyra.vfgAutoRegulate = checked }
                 }
                 VRow {
+                    label: qsTr("自适应倍率")
+                    visible: veyra.fgMultiplier > 2 && (veyra.fgBackendName === "dlss" || veyra.fgBackendName === "anr" || veyra.fgBackendName === "vfg")
+                    hint: qsTr("把所选倍率当上限，按游戏实时帧率逐对选用最接近目标帧率（输出上限或屏幕刷新率）的倍率，游戏掉帧时输出仍保持平稳；不重建补帧 · 默认关闭")
+                    VSwitch { objectName: "node-fg-adaptive"; checked: veyra.fgAdaptive; onToggled: checked => veyra.fgAdaptive = checked }
+                }
+                VRow {
+                    label: qsTr("帧节奏修复")
+                    visible: veyra.fgBackendName !== "xess"
+                    hint: qsTr("锁 30 帧但送帧不均（17/50 ms 交替）的主机游戏，补帧前把真实帧排回均匀间隔；只处理能确认是不均匀送帧的情况，最多晚一个采集刷新 · 需自动去重 · 默认关闭")
+                    VSwitch { objectName: "node-pacing-repair"; checked: veyra.pacingRepair; onToggled: checked => veyra.pacingRepair = checked }
+                }
+                VRow {
+                    label: qsTr("HUD 自动锁定")
+                    visible: veyra.fgBackendName !== "xess"
+                    hint: qsTr("自动找出持续静止且有边缘的像素（文字、准星、血条、小地图），生成帧直接用真实帧的这些像素，减少 HUD 拖影和抖动，不需要画框 · 默认关闭")
+                    VSwitch { objectName: "node-hud-lock"; checked: veyra.hudLock; onToggled: checked => veyra.hudLock = checked }
+                }
+                VRow {
                     label: qsTr("补帧运动来源")
                     visible: veyra.fgBackendName !== "vfg"
                     hint: qsTr("XeSS 默认零运动；FSR 仍有自身的光流计算")
@@ -1670,6 +1719,19 @@ VPage {
                     VSwitch { checked: veyra.fgStrict; onToggled: checked => veyra.fgStrict = checked }
                 }
                 NvidiaLowLatencyEditor { namePrefix: "node" }
+                VRow {
+                    objectName: "node-fg-auto-multiplier"
+                    label: qsTr("自动选择倍率")
+                    visible: veyra.fgAutoMultiplierAvailable
+                    hint: veyra.fgAutoMultiplierEnabled
+                          ? qsTr("按源帧率和输出上限自动选档；源帧率超过上限时关闭补帧")
+                          : qsTr("关闭时按手动选的倍率 · 默认关闭")
+                    hintBelow: veyra.fgAutoMultiplierEnabled
+                    VSwitch {
+                        checked: veyra.fgAutoMultiplierEnabled
+                        onToggled: checked => veyra.fgAutoMultiplierEnabled = checked
+                    }
+                }
                 VRow {
                     visible: !veyra.nvidiaLowLatencyAvailable
                     label: qsTr("低延迟队列")

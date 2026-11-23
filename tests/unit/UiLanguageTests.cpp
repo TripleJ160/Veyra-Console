@@ -2,6 +2,7 @@
 #include "veyra/ui/UiLanguage.h"
 
 #include <QCoreApplication>
+#include <QLocale>
 #include <cstdio>
 
 namespace {
@@ -16,6 +17,17 @@ void expect(const QString& got, const QString& want, const char* what) {
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     using namespace veyra::ui;
+
+    const struct { const char* code; const char* play; } languages[] = {
+        {"es", "Reproducir"}, {"fr", "Lire"}, {"de", "Abspielen"},
+        {"pt-BR", "Reproduzir"}, {"ru", "Воспроизвести"}
+    };
+    for (const auto& language : languages) {
+        const auto code = QString::fromLatin1(language.code);
+        expect(i18n::resolve(code), code, "explicit language");
+        if (!i18n::apply(code)) return 1;
+        expect(QCoreApplication::translate("Player", "播放"), QString::fromUtf8(language.play), "localized playback action");
+    }
 
     expect(i18n::resolve(QStringLiteral("ja")), QStringLiteral("ja"), "explicit choice kept");
     if (!i18n::apply(QStringLiteral("en"))) { std::printf("FAIL catalog did not load\n"); return 1; }
@@ -40,12 +52,24 @@ int main(int argc, char** argv) {
     expect(i18n::text(QStringLiteral("英伟达低延迟不可用，当前使用低排队（详见日志） · 输出上限：关闭 · 垂直同步：屏幕队列 1 帧，读帧前等待刷新 · 显示同步：垂直同步")),
            QStringLiteral("NVIDIA Low Latency unavailable; using low queue depth (see the log) · Output cap: off · VSync: 1-frame display queue, waits for refresh before reading a frame · Display sync: VSync"),
            "presentation fallback status pieces");
-    // The NVIDIA low latency hint names the option labels; the catalog key must match the QML text exactly.
-    expect(QCoreApplication::translate("Any", "减少处理排队。高负载时建议选「开」而不是「开＋增强」：增强有概率导致掉帧，还会提高 GPU 频率、增加功耗。"),
-           QStringLiteral("Reduce processing queue depth. Under heavy load, choose On rather than On + Boost: Boost can drop frames, and it raises GPU clocks and power use."),
-           "NVIDIA low latency heavy-load hint");
     // Unknown text and paths come back unchanged.
     expect(i18n::text(QStringLiteral("D:/视频/我的片子.mkv")), QStringLiteral("D:/视频/我的片子.mkv"), "path untouched");
+
+    expect(i18n::resolve(QStringLiteral("ko")), QStringLiteral("ko"), "explicit Korean choice kept");
+    if (QLocale::system().language() == QLocale::Korean)
+        expect(i18n::resolve(QStringLiteral("auto")), QStringLiteral("ko"), "Korean system language detected");
+    if (!i18n::apply(QStringLiteral("ko"))) { std::printf("FAIL Korean catalog did not load\n"); return 1; }
+    expect(i18n::current(), QStringLiteral("ko"), "Korean language active");
+    expect(QCoreApplication::translate("Any", "导出完成"), QStringLiteral("내보내기 완료"), "Korean exact translation");
+    expect(QCoreApplication::translate("Any", "关闭", "off"), QStringLiteral("끔"), "Korean off disambiguation");
+    expect(QCoreApplication::translate("Any", "关闭"), QStringLiteral("닫기"), "Korean close disambiguation");
+    expect(i18n::text(QStringLiteral("主机搜索发生错误（5），详情见日志；可手填 IP。")),
+           QStringLiteral("호스트 검색 중 오류가 발생했습니다(5). 자세한 내용은 로그를 확인하세요. IP를 직접 입력할 수 있습니다."), "Korean format pattern");
+    expect(i18n::text(QStringLiteral("HDR 视频自动使用 HEVC Main10 编码；视频导出完成")),
+           QStringLiteral("HDR 동영상은 자동으로 HEVC Main10으로 인코딩됩니다; 동영상 내보내기 완료"), "Korean status pieces");
+    expect(i18n::text(QStringLiteral("D:/视频/我的片子.mkv")), QStringLiteral("D:/视频/我的片子.mkv"), "Korean leaves unknown paths untouched");
+    i18n::apply(QStringLiteral("en"));
+    expect(QCoreApplication::translate("Any", "导出完成"), QStringLiteral("Export finished"), "switching back from Korean");
 
     i18n::apply(QStringLiteral("zh-CN"));
     expect(QCoreApplication::translate("Any", "导出完成"), QStringLiteral("导出完成"), "source language");

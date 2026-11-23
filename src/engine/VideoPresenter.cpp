@@ -1,13 +1,17 @@
+#include "veyra/diagnostics/HostWaitTrace.h"
 #include "veyra/engine/VideoPresenter.h"
+#include "veyra/engine/DoviCurveAdapter.h" // custom: Dolby Vision level 1 -> curve
 #include "veyra/engine/PresentationGeometry.h"
 #include "veyra/pipeline/EnhanceGraph.h"
 #include "veyra/gfx/D3D12DeviceContext.h"
 #include "veyra/gfx/CommandSlotRing.h"
 #include "veyra/sink/ImageExportSink.h"
-#include "veyra/diagnostics/HostWaitTrace.h"
+#include <cstdlib> // std::getenv (custom: Dolby Vision follow switch)
+#include <array>
+#include <memory>
 namespace veyra::engine {
-bool VideoPresenter::beginSourceInput(){
-    if(!reflexInputFrame_&&reflex_.active())reflexInputFrame_=reflex_.begin();
+bool VideoPresenter::beginSourceInput(uint64_t stallUs){
+    if(!reflexInputFrame_&&reflex_.active())reflexInputFrame_=reflex_.begin(stallUs);
     auto* xess=sink_.xess();if(!xess)return true;
     // Waiting/filtered inputs keep the same preparation ID. Do not sleep again
     // until one accepted source has been submitted to the enhancement graph.
@@ -36,6 +40,11 @@ bool VideoPresenter::open(gfx::D3D12DeviceContext& ctx,HWND window,pipeline::Enh
     // A graph change on the same chain (reuse) keeps the display state and the
     // VRR presentation; a new chain starts them at the end (startDisplayState).
     viewWidth_=viewHeight_=0;bufferMonitor_=nullptr;monitorWidth_=monitorHeight_=0;
+    refreshMonitor_=nullptr;
+    hdrPeakInfo_={};
+    latestDovi_={}; // A new chain never inherits the previous source's RPU.
+    smoothedStartNits_=0.0f;
+    avgEmaSeeded_=false; peakEmaSeeded_=false;
     ++generation_;
     Status st=Status::Ok;
     // Keep one presentation queue for the native chain's lifetime. A later
@@ -84,11 +93,12 @@ bool VideoPresenter::open(gfx::D3D12DeviceContext& ctx,HWND window,pipeline::Enh
     }
     if(!reuse&&!sink_.initialize(ctx.device(),queue,d,st))return false;
     if(reuse)veyra::log::info("present-reuse",std::format("retained native swapchain generation={} format={} fg={} output={}x{}; rebinding drained graph descriptors",generation_,unsigned(graph.outputFormat()),graph.fgEnabled(),graph.workWidth(),graph.workHeight()));
-    pass_={};rtvs_.Reset();compositeTarget_.Reset();
+    pass_={};rtvs_.Reset();compositeTarget_.Reset();exclusionUiTarget_.Reset();exclusionHudlessTarget_.Reset();
+    exclusionUiEnabled_=graph.xessEnabled()&&graph.exclusionEnabled();
     std::vector<uint8_t> vs,ps;
     // The output pool contains both parities of every generated subframe.
     // Comparison references follow it; derive offsets to cover VFG through 8X.
-    if(!pipeline::loadShaderBytes("PresentBlit_vs.dxil",vs)||!pipeline::loadShaderBytes("PresentBlit_ps.dxil",ps)||!pass_.create(ctx.device(),vs,ps,pipeline::kOutputPoolSlots+4,graph.outputFormat(),16))return false;
+    if(!pipeline::loadShaderBytes("PresentBlit_vs.dxil",vs)||!pipeline::loadShaderBytes("PresentBlit_ps.dxil",ps)||!pass_.create(ctx.device(),vs,ps,pipeline::kOutputPoolSlots+8,graph.outputFormat(),16))return false;
     if(sink_.xess()){
         std::vector<uint8_t> cs;
         if(!pipeline::loadShaderBytes("PresentMotion.dxil",cs)||!presentMotionPass_.create(ctx.device(),cs,4,1,1,16))return false;
@@ -109,12 +119,18 @@ bool VideoPresenter::open(gfx::D3D12DeviceContext& ctx,HWND window,pipeline::Enh
     // Opening a source never opts the user in or allocates the copy surface.
     // configurePresentation applies the saved global choice on the GPU owner.
     copyBeforePresent_=false;
-    D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_RTV;hd.NumDescriptors=4;
+    D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_RTV;hd.NumDescriptors=6;
     if(FAILED(ctx.device()->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&rtvs_))))return false;
     inc_=ctx.device()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);if(!refresh(ctx.device()))return false;
     veyra::log::info("present-copy",std::format("enabled={} format={} extent={}x{} (GPU-only final composition; no pixel readback)",copyBeforePresent_,unsigned(graph.outputFormat()),sink_.bufferWidth(),sink_.bufferHeight()));
     for(unsigned i=0;i<pipeline::kOutputPoolSlots;++i)pipeline::makeSrv(ctx.device(),i<2?graph.videoFrameResource(i):graph.generatedFrameResource(i-2),graph.outputFormat(),{pass_.heap->GetCPUDescriptorHandleForHeapStart().ptr+size_t(i)*pass_.increment});
     for(unsigned i=0;i<4;++i)pipeline::makeSrv(ctx.device(),i<2?graph.sourceReference(i):graph.baseReference(i-2),DXGI_FORMAT_R16G16B16A16_FLOAT,{pass_.heap->GetCPUDescriptorHandleForHeapStart().ptr+size_t(i+pipeline::kOutputPoolSlots)*pass_.increment});
+    if(exclusionUiEnabled_)for(unsigned i=0;i<2;++i)
+        pipeline::makeSrv(ctx.device(),graph.exclusionUi(i),graph.outputFormat(),
+            {pass_.heap->GetCPUDescriptorHandleForHeapStart().ptr+size_t(pipeline::kOutputPoolSlots+4+i)*pass_.increment});
+    if(exclusionUiEnabled_)for(unsigned i=0;i<2;++i)
+        pipeline::makeSrv(ctx.device(),graph.unmaskedVideo(i),graph.outputFormat(),
+            {pass_.heap->GetCPUDescriptorHandleForHeapStart().ptr+size_t(pipeline::kOutputPoolSlots+6+i)*pass_.increment});
     if(!reuse)startDisplayState();
     return true;
 }
@@ -125,14 +141,12 @@ bool VideoPresenter::prepareGraphChange(){
     // Retain metadataSent_: a new graph disabling metadata must clear the
     // hint that is still attached to the retained DXGI chain.
     metadataDirty_=true;metadataAttempt_={};sourceMetadata_={};
-    reflex_.close();reflexFrame_=reflexInputFrame_=0;
-    return true;
+    reflex_.close();reflexFrame_=reflexInputFrame_=0;    return true;
 }
 bool VideoPresenter::refresh(ID3D12Device* device){
     // ResizeBuffers keeps the swapchain object and may retain its metadata.
     // Request a resend without forgetting an active hint that must be cleared
     // if the user disables metadata immediately after a resize.
-    metadataDirty_=true;metadataAttempt_={};
     Microsoft::WRL::ComPtr<ID3D12Resource> bb;
     for(unsigned i=0;i<3;++i){
         bb.Reset();const HRESULT hr=sink_.swapChain()->GetBuffer(i,IID_PPV_ARGS(&bb));
@@ -157,6 +171,23 @@ bool VideoPresenter::refresh(ID3D12Device* device){
             }
         }
         if(compositeTarget_)device->CreateRenderTargetView(compositeTarget_.Get(),nullptr,{rtvs_->GetCPUDescriptorHandleForHeapStart().ptr+size_t(3)*inc_});
+    }
+    if(exclusionUiEnabled_){
+        auto desc=bb->GetDesc();
+        unsigned index=4;
+        for(auto* surface:{std::addressof(exclusionUiTarget_),std::addressof(exclusionHudlessTarget_)}){
+            if(!*surface||(*surface)->GetDesc().Width!=desc.Width||
+               (*surface)->GetDesc().Height!=desc.Height||(*surface)->GetDesc().Format!=desc.Format){
+                D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_DEFAULT;
+                desc.Flags=D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+                D3D12_CLEAR_VALUE clear{};clear.Format=desc.Format;
+                const auto hr=device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,
+                    D3D12_RESOURCE_STATE_COMMON,&clear,IID_PPV_ARGS(surface->ReleaseAndGetAddressOf()));
+                if(FAILED(hr)){veyra::log::error("exclusion",std::format("XeSS composition allocation hr=0x{:X}",unsigned(hr)));return false;}
+            }
+            device->CreateRenderTargetView(surface->Get(),nullptr,
+                {rtvs_->GetCPUDescriptorHandleForHeapStart().ptr+size_t(index++)*inc_});
+        }
     }
     return true;
 }
@@ -201,29 +232,104 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
     const bool needsDisplayPeak=hdrBaseline.enabled||(metadataBaseline.enabled&&
         (metadataBaseline.masteringPeakNits||metadataBaseline.maxCllNits||metadataBaseline.maxFallNits));
     if(graph.hdrOutput()&&needsDisplayPeak&&hdrBaseline.displayPeakNits==0){
-        // The panel's own peak from the shared display state: no driver call here
-        // (this thread used to build a DXGI factory for it every 2 s).
         const auto monitor=MonitorFromWindow(window_,MONITOR_DEFAULTTONEAREST);
         gfx::PresentSink::DisplayPeakInfo peak{};
         if(displayStates_)if(const auto known=displayStates_->state(monitor))
-            peak={known->color.peakNits,known->color.fullFrameNits,known->color.minNits,known->color.peakValid};
-        if(peak.valid!=hdrPeakInfo_.valid||peak.peakNits!=hdrPeakInfo_.peakNits)retainedFrame_.reset();
+            peak={known->color.peakNits,known->color.fullFrameNits,known->color.minNits,
+                  known->color.peakValid,known->color.peakPlausible};
+        hdrBaseline.displayPeakNits=resolveHdrDisplayPeakNits(0,peak.peakNits,peak.plausible);
+        if(hdrBaseline.displayPeakNits!=resolveHdrDisplayPeakNits(0,hdrPeakInfo_.peakNits,hdrPeakInfo_.plausible))
+            retainedFrame_.reset();
         hdrPeakInfo_=peak;
-        if(hdrPeakInfo_.valid)hdrBaseline.displayPeakNits=std::clamp(hdrPeakInfo_.peakNits,100u,10000u);
+    }
+    {
+        // Custom: one-shot record of what the display reports and whether it was
+        // trusted, so the curve's effective target is never a guess.
+        static unsigned peakLogged = 0;
+        if (peakLogged < 2 && graph.hdrOutput()) {
+            ++peakLogged;
+            veyra::log::info("hdr-peak", std::format(
+                "report valid={} plausible={} peak={} black={:.3f} needsPeak={} curveDisplayPeakNits={}",
+                hdrPeakInfo_.valid ? 1 : 0, hdrPeakInfo_.plausible ? 1 : 0,
+                hdrPeakInfo_.peakNits, hdrPeakInfo_.minNits,
+                needsDisplayPeak ? 1 : 0, hdrBaseline.displayPeakNits));
+        }
     }
     HdrCurveSettings hdrCurve;HdrMetadataSettings hdrMetadata;
     resolveHdrTuning(hdrBaseline,graph.hdrMetadata(),hdrCurve,hdrMetadata);
-    applyHdrMetadata(graph,hdrMetadata,hdrCurve,identity);
+    // Custom: follow Dolby Vision level 1. Only the highlight start (and the
+    // peak cap under the user's ceiling) moves; shadow lift, mid-gray and
+    // roll-off strength stay exactly what the user set, so the picture is never
+    // silently re-shaded. hdrCurve itself stays the static curve for the
+    // display metadata and the coverage probe, and nothing is applied at all
+    // unless the switch is on: the delivered image is unchanged otherwise.
+    // VEYRA_DOVI_FOLLOW stays as a test override while the switch is checked.
+    const bool followDovi=latestDovi_.valid&&(graph.doviFollow()||std::getenv("VEYRA_DOVI_FOLLOW")!=nullptr);
+    // Average brightness, smoothed over ~0.5 s so the knee does not breathe with
+    // every frame. A large jump (scene change) resets the window instead of
+    // dragging the old value along.
+    double smoothedAvgPq=-1.0;
+    if(followDovi&&latestDovi_.valid){
+        const double avgPq=latestDovi_.avgPq;
+        if(avgPq>0.0){
+            const bool reset=!avgEmaSeeded_||(avgEma_>0.0&&(avgPq>avgEma_*3.0||avgPq<avgEma_/3.0));
+            if(reset){avgEma_=avgPq;avgEmaSeeded_=true;}
+            else avgEma_+=(avgPq-avgEma_)*0.2;
+            smoothedAvgPq=avgEma_;
+        }
+    }
+    // Custom: smooth the peak the same way. The knee is peak * 0.85, so an
+    // unsmoothed peak turns every bright frame into a step in the curve - which is
+    // what "the follow flickers" meant in practice. Same window and same
+    // scene-change reset as the average, so a cut does not drag the old value in.
+    double smoothedPeakPq=-1.0;
+    if(followDovi&&latestDovi_.valid){
+        const double peakPq=latestDovi_.maxPq;
+        // A frame claiming more than 4000 nits is not a real master - the HDR10+ test
+        // clip carries frames at maxscl = 1.0, i.e. 10000 nits. Following such a frame
+        // pins the knee at its ceiling for one frame and drops it the next, which is
+        // exactly the flicker being chased. Ignore it and hold the last sane value.
+        constexpr double kMaxSanePeakNits=4000.0;
+        const bool sane=peakPq>0.0&&engine::pqToNits(peakPq)<=kMaxSanePeakNits;
+        if(sane){
+            const bool reset=!peakEmaSeeded_||(peakEma_>0.0&&(peakPq>peakEma_*3.0||peakPq<peakEma_/3.0));
+            if(reset){peakEma_=peakPq;peakEmaSeeded_=true;}
+            else peakEma_+=(peakPq-peakEma_)*0.2;
+            smoothedPeakPq=peakEma_;
+        }else if(peakEmaSeeded_){
+            smoothedPeakPq=peakEma_;   // hold: an implausible frame must not move the curve
+        }
+    }
+    HdrCurveSettings effective=followDovi?engine::doviCurveFromLevel1(latestDovi_,hdrCurve,graph.doviFollowAverage(),smoothedAvgPq,smoothedPeakPq):hdrCurve;
+    // Custom: smooth the value that actually reaches the blit. Smoothing the peak is
+    // not enough: the knee goes through clamp() and min(user), both of which flatten
+    // or step, so the output can jump while the input is already smooth. This is what
+    // the sky flicker on the HDR10+ test clip actually was.
+    if(followDovi&&graph.hdrOutput()){
+        const float target=float(effective.highlightStartNits);
+        if(smoothedStartNits_<=0.0f)smoothedStartNits_=target;
+        else smoothedStartNits_+=(target-smoothedStartNits_)*0.12f;
+        effective.highlightStartNits=unsigned(std::lround(smoothedStartNits_));
+    }else{
+        smoothedStartNits_=0.0f;
+    }
+    // The trace is its own gate: a user who turns the switch on must not get a
+    // line per frame pair for the length of a film. It also records the switch
+    // itself, so "RPU present but the setting did not arrive" is diagnosable.
+    const bool traceDovi=latestDovi_.valid&&std::getenv("VEYRA_DOVI_TRACE")!=nullptr;
     const RetainedFrame retained{graph.presentationReadyFenceObject(slot,generated),graph.presentationReadyFence(slot,generated),
         slot,unsigned(rc.right),unsigned(rc.bottom),generated,referencesValid,baseReference,IsWindowVisible(window_)!=FALSE,
-        comparison,split,view,identity,MonitorFromWindow(window_,MONITOR_DEFAULTTONEAREST),graph.hdrOutput()?hdrCurve:HdrCurveSettings{}};
+        comparison,split,view,identity,MonitorFromWindow(window_,MONITOR_DEFAULTTONEAREST),graph.hdrOutput()?effective:HdrCurveSettings{}};
     // Pausing keeps the last flip-model buffer visible. Re-submit only when
     // its producer fence, view, comparison, visibility, monitor or size changes.
     // Deferred resize must keep polling until the actual buffers match.
-    if(retainUnchanged&&retained.producer&&retained.fence&&retainedFrame_&&*retainedFrame_==retained&&
+    if(retainUnchanged&&(!capture_||!capture_->needsFrame())&&retained.producer&&retained.fence&&retainedFrame_&&*retainedFrame_==retained&&
         !windowChanging&&targetWidth==sink_.width()&&targetHeight==sink_.height()&&
         SUCCEEDED(ctx.device()->GetDeviceRemovedReason())&&
-        !GetEnvironmentVariableW(L"VEYRA_TEST_DISABLE_PAUSED_PRESENT_REUSE",nullptr,0))return true;
+        !GetEnvironmentVariableW(L"VEYRA_TEST_DISABLE_PAUSED_PRESENT_REUSE",nullptr,0)){
+        applyHdrMetadata(graph,hdrMetadata,effective,identity);
+        return true;
+    }
     retainedFrame_.reset(); // A failed present never seeds an idle cache.
     if(!windowChanging&&(targetWidth!=sink_.width()||targetHeight!=sink_.height())&&GetTickCount64()>=deferUntil&&now-lastResize_>=std::chrono::milliseconds(100)&&sink_.resizeDue()) {
         resized=true;
@@ -232,7 +338,9 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
         // valid buffers and let DXGI scale them until a later resize succeeds.
         if(!sink_.currentBackBuffer()||FAILED(ctx.device()->GetDeviceRemovedReason()))return false;
         if(!refresh(ctx.device()))return false;lastResize_=now;xessWasEnabled_=false;
+        metadataDirty_=true;
     }
+    applyHdrMetadata(graph,hdrMetadata,effective,identity);
     const auto resizeEnd=std::chrono::steady_clock::now();
     if(auto* xess=sink_.xess()){
         uint32_t preparedId=0;
@@ -277,19 +385,59 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
     // tuning, then encode back; disabled tuning keeps the original exact blit.
     // Display tuning also applies after RTX Video HDR converted an SDR source.
     const float curveFlag=(hdrCurve.enabled&&graph.hdrOutput())?16.0f:0.0f;
-    const float mainFlags=samplingFlags+curveFlag+(curveFlag&&graph.hdr10Output()?36.0f:0.0f);
+    // 抖动位：HDR 输出、且这一帧来自 P7 重建时开启。
+    // 重建出的是 12 位，而交换链是 R10G10B10A2（10 位），硬件在 resolve 时截断，
+    // 平滑渐变会因此出现色带。加一个亚于 1 个台阶的偏移把台阶变成人眼会平均掉的噪声。
+    // The dither bit: on for HDR output when this frame came from the P7 reconstruction.
+    // The reconstruction produces 12 bits and the swapchain takes 10, and the hardware
+    // truncates on resolve, which leaves banding in smooth gradients. A sub-LSB offset
+    // turns that step into noise the eye averages away.
+    const bool p7Frame=graph.doviP7Active();
+    const float ditherFlag=(graph.hdrOutput()&&p7Frame)?512.0f:0.0f;   // 256 is the alpha round trip in 2.1.6
+    const float mainFlags=samplingFlags+curveFlag+(curveFlag&&graph.hdr10Output()?36.0f:0.0f)+ditherFlag;
     float dims[16]={renderW,renderH,mainFlags,inverseFit,float(rc.right),float(rc.bottom),view.centerX,view.centerY};
-    dims[8]=float(hdrCurve.shadowLiftEv100)/100.0f;
-    dims[9]=float(hdrCurve.shadowRangeNits);
-    dims[10]=float(hdrCurve.midGrayNits);
-    dims[11]=float(hdrCurve.highlightStartNits);
+    // The blit sees the per-frame curve when Dolby Vision follow is on; every
+    // other frame (and every non-DV source) passes the user's settings through.
+    dims[8]=float(effective.shadowLiftEv100)/100.0f;
+    dims[9]=float(effective.shadowRangeNits);
+    dims[10]=float(effective.midGrayNits);
+    dims[11]=float(effective.highlightStartNits);
     {
-        const float peak=hdrCurve.peakCapNits?float(hdrCurve.peakCapNits):1000.0f;
-        const float start=float(hdrCurve.highlightStartNits);
-        dims[12]=std::max(1.0f,peak-start)*float(hdrCurve.rollOffPercent)/100.0f;
-        dims[13]=float(hdrCurve.peakCapNits);
+        // The roll-off has to close at a real ceiling. Following the frame means
+        // closing at the frame's own peak, so the knee is not a slope stretched
+        // across the whole panel range (a 4000 nit ceiling with a 286 nit knee
+        // would barely compress anything the frame actually contains). The hard
+        // ceiling itself (dims[13]) stays the user's: it also anchors the mid-gray
+        // gamma, so moving it would reshape the whole tone scale.
+        float peak=effective.peakCapNits?float(effective.peakCapNits):1000.0f;
+        const float start=float(effective.highlightStartNits);
+        if(followDovi){
+            const float framePeak=float(engine::pqToNits(latestDovi_.maxPq));
+            peak=std::min(peak,std::max(framePeak,start+1.0f));
+        }
+        dims[12]=std::max(1.0f,peak-start)*float(effective.rollOffPercent)/100.0f;
+        dims[13]=float(effective.peakCapNits);
     }
     dims[14]=0.0f;dims[15]=0.0f;
+    if(traceDovi){
+        // Gated trace: proves the per-frame curve reached the blit constants.
+        // Throttled like the source-side dovi-probe so a long file stays small.
+        static int doviFollowCount=0;
+        if(doviFollowCount<3||doviFollowCount%200==0){
+            const std::string sourceLabel=latestDovi_.profile==pipeline::kHdr10PlusProfile?"HDR10+":
+                (latestDovi_.profile==0?"none":std::format("DV{}",int(latestDovi_.profile)));
+            veyra::log::info("dovi-follow",std::format("n={} follow={} applied={} source={} maxPq={:.4f} smoothedMaxPq={:.4f} peakNits={:.1f} highlightStartNits={} (user={}) peakCapNits={} (user={})",
+                doviFollowCount,followDovi?1:0,curveFlag!=0.0f?1:0,sourceLabel,latestDovi_.maxPq,
+                // -1 means no value survived the plausibility filter (all frames claimed
+                // over 4000 nits, e.g. Dolby's P10 test signal at ~10000); fall back to
+                // the raw peak so the trace does not print a bare -1.0000.
+                smoothedPeakPq>0.0?smoothedPeakPq:latestDovi_.maxPq,
+                engine::pqToNits(smoothedPeakPq>0.0?smoothedPeakPq:latestDovi_.maxPq),effective.highlightStartNits,hdrCurve.highlightStartNits,
+                effective.peakCapNits,hdrCurve.peakCapNits));
+        }
+        // The counter advances outside the branch, so the periodic sample fires.
+        ++doviFollowCount;
+    }
     list->SetGraphicsRoot32BitConstants(0,16,dims,0);
     list->SetGraphicsRootDescriptorTable(1,{pass_.heap->GetGPUDescriptorHandleForHeapStart().ptr+size_t(slot+(generated?2:0))*pass_.increment});
     list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);list->DrawInstanced(3,1,0,0);
@@ -348,7 +496,7 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
     struct CaptureGuard{PresentCapture* capture;bool& recorded;~CaptureGuard(){if(recorded&&capture)capture->discarded();}} captureGuard{capture_,captureRecorded};
     if(capture_){
         const uint32_t hdrMode=graph.hdrOutput()?(graph.hdr10Output()?2u:1u):0u;
-        captureRecorded=capture_->record(list,{source,graph.outputFormat(),graph.workWidth(),graph.workHeight(),hdrMode,graph.outputDitherStep(),generated});
+        captureRecorded=capture_->record(list,{source,graph.outputFormat(),graph.workWidth(),graph.workHeight(),hdrMode,graph.outputDitherStep(),generated,graph.sourceWidth(),graph.sourceHeight(),graph.highQualityPresentation()});
     }
     // Interpolation region for the XeSS present-sink FG backend.
     // It must follow the PresentBlit view mapping (contain * zoom, view
@@ -412,7 +560,45 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
             // This timer covers application commands, not provider execution.
             gpuTimer_.mark(list,diagnostics::GpuStage::FgBatch);
             const RECT fullBuffer{0,0,LONG(sink_.bufferWidth()),LONG(sink_.bufferHeight())};
-            if(!xess->tag(list,bb,mapped,depth,fullBuffer,true,reset,elapsed)){xessFailed_=true;return false;}
+            ID3D12Resource* ui=nullptr;
+            ID3D12Resource* hudless=nullptr;
+            if(exclusionUiEnabled_){
+                ui=exclusionUiTarget_.Get();
+                auto* sourceUi=graph.exclusionUi(slot);
+                pipeline::StateTracker uiState;
+                uiState.transition(list,sourceUi,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                uiState.transition(list,ui,D3D12_RESOURCE_STATE_RENDER_TARGET);
+                const D3D12_CPU_DESCRIPTOR_HANDLE uiRtv{rtvs_->GetCPUDescriptorHandleForHeapStart().ptr+size_t(4)*inc_};
+                const float transparent[4]{};
+                list->ClearRenderTargetView(uiRtv,transparent,0,nullptr);
+                list->OMSetRenderTargets(1,&uiRtv,FALSE,nullptr);
+                const D3D12_RECT all{0,0,LONG(sink_.bufferWidth()),LONG(sink_.bufferHeight())};
+                list->RSSetScissorRects(1,&all);
+                list->SetDescriptorHeaps(1,heaps);
+                list->SetGraphicsRootSignature(pass_.rootSig.Get());list->SetPipelineState(pass_.pso.Get());
+                auto uiDims=std::to_array(dims);uiDims[2]=mainFlags+256.f;
+                list->SetGraphicsRoot32BitConstants(0,16,uiDims.data(),0);
+                list->SetGraphicsRootDescriptorTable(1,{pass_.heap->GetGPUDescriptorHandleForHeapStart().ptr+
+                    size_t(pipeline::kOutputPoolSlots+4+slot)*pass_.increment});
+                list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                list->DrawInstanced(3,1,0,0);
+                uiState.transition(list,sourceUi,D3D12_RESOURCE_STATE_COMMON);
+                uiState.transition(list,ui,D3D12_RESOURCE_STATE_COMMON);
+                hudless=exclusionHudlessTarget_.Get();
+                auto* sourceHudless=graph.unmaskedVideo(slot);
+                uiState.transition(list,sourceHudless,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                uiState.transition(list,hudless,D3D12_RESOURCE_STATE_RENDER_TARGET);
+                const D3D12_CPU_DESCRIPTOR_HANDLE hudlessRtv{rtvs_->GetCPUDescriptorHandleForHeapStart().ptr+size_t(5)*inc_};
+                list->ClearRenderTargetView(hudlessRtv,black,0,nullptr);
+                list->OMSetRenderTargets(1,&hudlessRtv,FALSE,nullptr);
+                list->SetGraphicsRoot32BitConstants(0,16,dims,0);
+                list->SetGraphicsRootDescriptorTable(1,{pass_.heap->GetGPUDescriptorHandleForHeapStart().ptr+
+                    size_t(pipeline::kOutputPoolSlots+6+slot)*pass_.increment});
+                list->DrawInstanced(3,1,0,0);
+                uiState.transition(list,sourceHudless,D3D12_RESOURCE_STATE_COMMON);
+                uiState.transition(list,hudless,D3D12_RESOURCE_STATE_COMMON);
+            }
+            if(!xess->tag(list,bb,mapped,depth,fullBuffer,true,reset,elapsed,ui,hudless)){xessFailed_=true;return false;}
             gpuTimer_.mark(list,diagnostics::GpuStage::FgBatch,true);
         }else if(!xess->tag(list,bb,motion,depth,fgRect,false,reset,elapsed)){xessFailed_=true;return false;}
         // A present that carried no NEW source frame is a repeat, not a
@@ -439,6 +625,7 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
         publishLiveCoverage(hdrCurve,identity);lastBuffer_=backBufferIndex;hasPresented_=true;
     if(presentationQueue_)graph.presentationSubmitted(slot,fence,ring.lastSignaledValue());
     const auto dxgiStart=std::chrono::steady_clock::now();
+    lastPresentCallHost100ns_=std::chrono::duration_cast<std::chrono::nanoseconds>(dxgiStart.time_since_epoch()).count()/100;
     reflex_.presentStart(reflexFrame,generated);
     const bool presented=sink_.present(st);
     reflex_.presentEnd(reflexFrame,generated);
@@ -506,11 +693,12 @@ void VideoPresenter::close(){
     metadataSent_=false;metadataDirty_=false;lastMetadata_={};sourceMetadata_={};metadataAttempt_={};
     hdrPeakInfo_={};
     refreshMonitor_=nullptr;refreshHz_=0;vrr_={};refreshQueried_=false;vrrSync_=false;displayStateSerial_=0;vrrConfirmAt_.reset();
+    
     retainedFrame_.reset();
     xessInputId_=0;xessWork_={};xessWorkPosition_=0;
     reflex_.close();reflexFrame_=reflexInputFrame_=0;
     if(presentationRing_.initialized())presentationRing_.drainQueue();
-    hasPresented_=false;gpuTimer_.close();compositeTarget_.Reset();copyBeforePresent_=copyEligible_=false;rtvs_.Reset();
+    hasPresented_=false;gpuTimer_.close();compositeTarget_.Reset();exclusionUiTarget_.Reset();exclusionHudlessTarget_.Reset();exclusionUiEnabled_=false;copyBeforePresent_=copyEligible_=false;rtvs_.Reset();
     probeStats_.Reset();probeReadback_.Reset();probeCpuViews_.Reset();probePass_={};probePending_=false;probeFailed_=false;probeNext_={};probeCurve_={};probeIdentity_={};liveCoverage_={};pass_={};sink_.shutdown();
     presentMotionPass_={};presentMotion_={};previousXessWidth_=previousXessHeight_=0;
     presentationRing_.shutdown();presentationFence_.Reset();presentationQueue_.Reset();
@@ -537,7 +725,7 @@ void VideoPresenter::applyDisplayState(const DisplayState& state){
     const auto hz=state.refreshHz;const auto& vrr=state.vrr;
     if(refreshQueried_&&std::abs(hz-refreshHz_)>0.5)veyra::log::info("display-refresh",std::format("monitor refresh={:.3f} Hz (was {:.3f}; window moved or display mode changed)",hz,refreshHz_));
     refreshHz_=hz;sink_.setDisplayRefreshHz(hz);
-    if(!(vrr==vrr_)||!refreshQueried_)veyra::log::info("display-vrr",std::format("level={} known={} monitorSupportsVrr={} currentlyCapable={} trueGsync={} capsKnown={} possible={} requested={} active={} displayInVrrMode={} indicator={} simulated={} status={} refreshHz={:.3f} (NVIDIA G-SYNC / G-SYNC Compatible state of the window's monitor; enabled by the user in the NVIDIA Control Panel, never changed by Veyra)",gfx::vrrLevel(vrr),vrr.known,vrr.supportsVrr,vrr.currentlyCapable,vrr.trueGsync,vrr.capsKnown,vrr.possible,vrr.requested,vrr.enabled,vrr.inVrrMode,vrr.indicator,vrr.simulated,vrr.status,hz));
+    if(!(vrr==vrr_)||!refreshQueried_)veyra::log::info("display-vrr",std::format("level={} known={} monitorSupportsVrr={} currentlyCapable={} trueGsync={} capsKnown={} possible={} requested={} active={} displayInVrrMode={} indicator={} simulated={} status={} refreshHz={:.3f} (NVIDIA G-SYNC / G-SYNC Compatible state of the window's monitor; read-only monitor query, per-application setup is a separate explicit action)",gfx::vrrLevel(vrr),vrr.known,vrr.supportsVrr,vrr.currentlyCapable,vrr.trueGsync,vrr.capsKnown,vrr.possible,vrr.requested,vrr.enabled,vrr.inVrrMode,vrr.indicator,vrr.simulated,vrr.status,hz));
     vrr_=vrr;refreshQueried_=true;displayStateSerial_=state.serial;
 }
 double VideoPresenter::displayRefreshHz(){
@@ -661,8 +849,8 @@ PresentationSettings VideoPresenter::configurePresentation(gfx::D3D12DeviceConte
     // carries out-of-band markers, never another source-frame Sleep.
     std::wstring latency=L"低延迟队列：已开启";
     if(requested.nvidiaLowLatency!=NvidiaLowLatency::Off){
-        if(reflex_.enable(ctx.device(),requested.nvidiaLowLatency==NvidiaLowLatency::Boost,fg,presentationQueue_.Get()))
-            latency=requested.nvidiaLowLatency==NvidiaLowLatency::Boost?L"英伟达低延迟：开＋增强（已启用）":L"英伟达低延迟：开（已启用）";
+        if(reflex_.enable(ctx.device(),fg,presentationQueue_.Get()))
+            latency=L"英伟达低延迟：开（已启用）";
         else{effective.nvidiaLowLatency=NvidiaLowLatency::Off;latency=L"英伟达低延迟不可用，当前使用低排队（详见日志）";}
     }
     status=join({latency,cap,queue,syncMode,syncDetail});

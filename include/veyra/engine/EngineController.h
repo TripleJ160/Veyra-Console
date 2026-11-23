@@ -28,6 +28,7 @@
 #include "veyra/sink/VideoEncoder.h"
 #include "veyra/engine/ExportOptions.h"
 #include "veyra/engine/LiveRecorder.h"
+#include "veyra/engine/VirtualCamera.h"
 #include "veyra/engine/DisplayStateService.h"
 namespace veyra::source { struct RemotePlayConnectDesc; class RemotePlaySessionSource; struct MoonlightConnectDesc; class MoonlightSessionSource; struct XboxConnectDesc; class XboxSessionSource; }
 namespace veyra::remoteplay { struct ControllerState;struct ControllerFeedback; }
@@ -37,6 +38,9 @@ namespace veyra::engine {
 class FrameFlowWindow;
 struct PreviewGpuSession;
 struct PlayerOptions { bool nr=false,sr=false,fg=false,realtime=true; uint32_t fgMultiplier=2; EnhancementSettings settings;
+    // 「自动」抑制态由 settings.fgAutoMultiplier + 源帧率/输出上限在 EngineController
+    // 的每帧循环里判定（previewFgMultiplier=1），不在这里另存状态：PlayerOptions 会在
+    // 每次 applySettings 之后由 from() 重建，放在这里的字段会丢。
     std::optional<ChainRuntimeOrder> nodeOrder; // in-process only; not export shared memory
     int audioStreamIndex=-1; // export selection; -1 selects the container default
     double exportStartSeconds=0.0; // export-only trim; first complete frame at/after this time
@@ -50,8 +54,16 @@ struct PlayerOptions { bool nr=false,sr=false,fg=false,realtime=true; uint32_t f
     bool deinterlace=true; // automatic file deinterlace, preserves progressive bypass
     bool hardwareDecodeOnly=false; // user setting "强制硬解": files fail instead of falling back to software
     media::NetworkSettings network; // buffering / reconnect / damaged-picture choices for network sources and servers
+    // Separate audio address for a DASH source (Bilibili): the video container has
+    // no audio track, so the audio pipeline opens this instead.
+    std::wstring audioPath;
     EnhancementSettings snapshot()const{auto s=settings;s.nr=nr;s.sr=sr;s.multiplier=fg?fgMultiplier:1;s.nrPolicy=realtime?(settings.nrPolicy==pipeline::NrSizePolicy::Native?pipeline::NrSizePolicy::Realtime:settings.nrPolicy):pipeline::NrSizePolicy::Native;return s;}
-    static PlayerOptions from(EnhancementSettings s,std::optional<ChainRuntimeOrder> order=std::nullopt){PlayerOptions o;o.nr=s.nr;o.sr=s.sr;o.fg=s.multiplier>1;o.fgMultiplier=std::max(2u,s.multiplier);o.realtime=s.nrPolicy!=pipeline::NrSizePolicy::Native;o.settings=s;o.nodeOrder=order;return o;}
+    static PlayerOptions from(EnhancementSettings s,std::optional<ChainRuntimeOrder> order=std::nullopt,const PlayerOptions* keep=nullptr){
+        PlayerOptions o;o.nr=s.nr;o.sr=s.sr;o.fg=s.multiplier>1;o.fgMultiplier=std::max(2u,s.multiplier);o.realtime=s.nrPolicy!=pipeline::NrSizePolicy::Native;o.settings=s;o.nodeOrder=order;
+        // Per-open state that EnhancementSettings does not carry: a rebuild would
+        // otherwise drop the DASH audio address and the site's request headers.
+        if(keep){o.audioPath=keep->audioPath;o.network.requestHeaders=keep->network.requestHeaders;o.network.userAgent=keep->network.userAgent;}
+        return o;}
 };
 enum class TransportState { Empty, Opening, Playing, Paused, Ended, Stopping, Failed };
 struct PlayerSnapshot {
@@ -91,6 +103,10 @@ struct PlayerSnapshot {
     std::wstring backendWarning;
     std::wstring sourceNotice;
     std::wstring colorStatus;
+    // Custom (format label): the source's HDR format as one word ("Dolby Vision
+    // P7", "HDR Vivid", "HDR10+", "HDR10", "HLG", "SDR"). The start-up badge and
+    // the player bar both read it; empty for captures and images.
+    std::wstring sourceHdrLabel;
     std::wstring videoHdrStatus;
     // Beauty nodes: whether the graph runs any, the faces the shared tracker saw a
     // few frames ago, and a problem that keeps them from finding faces.
@@ -119,6 +135,16 @@ struct PlayerSnapshot {
     // The source's own HDR numbers, straight from the container. They survive the
     // hardware-decode path, where there is no CPU luma to measure a histogram from.
     unsigned sourceMasteringPeakNits=0;
+    // Dolby Vision: stream-level profile/RPU flag plus the current frame's L1 peak.
+    unsigned sourceDoviProfile=0;
+    bool sourceDoviRpu=false;
+    unsigned sourceDoviMaxNits=0;
+    // True when the source declares a Dolby Vision enhancement layer, which is
+    // what drives the "auto" composite switch in the UI.
+    bool sourceDoviEnhancement=false;
+    // True when the source carries HDR10+ (SMPTE ST 2094-40) scene metadata. The
+    // follow switch serves this too, so the UI has to know the format to name it.
+    bool sourceHdr10Plus=false;
     unsigned sourceMaxCllNits=0;
     unsigned sourceMaxFallNits=0;
     // Custom: the live coverage the presenter measured with its 64x36 probe (see
@@ -159,6 +185,10 @@ struct PlayerSnapshot {
     double playbackRate=1; // requested file-preview transport rate; separate from measurement
     bool fgBudgetLimited=false,xessGenerationSuppressed=false;
     unsigned previewFgMultiplier=0;
+    // Frame pacing repair (FramePacingRepair.h): kept frames seen and re-timed.
+    uint64_t pacingFrames=0,pacingRepaired=0;
+    // Live HUD Lock (EnhanceGraph::hudLockState): 0 off, 1 running, 2 unavailable, 3 not with this frame generation.
+    int hudLockState=0;
     // Live FG output hint (DisplayFgBudget.h), never applied automatically:
     // 0 = the output fits the panel, 1 = suggest turning generation off,
     // otherwise the suggested lower multiplier. Refresh and content rate are
@@ -262,6 +292,8 @@ public:
     bool rotatePreviewClockwise(uint64_t session){std::lock_guard lock(mutex_);if(session!=snapshot_.sessionId||(!snapshot_.running&&!snapshot_.image))return false;previewView_.rotateClockwise();return true;}
     PreviewView previewView()const{std::lock_guard lock(mutex_);return previewView_;}
     void setVolume(float gain,bool mute);
+    // Local capture monitoring only. Recording takes PCM before this gain.
+    void setCaptureAudioMonitoring(bool enabled);
     bool selectAudioTrack(uint64_t sessionId,int streamIndex);
     void seek(double seconds){if(!std::isfinite(seconds)||seconds<0)return;std::lock_guard lock(mutex_);snapshot_.seekTarget=seconds;++snapshot_.seekRequested;seekSeconds_.store(seconds);}
     void saveFrame(const std::wstring& path);
@@ -273,6 +305,16 @@ public:
     bool requestRecording(const RecordingSettings& options,std::wstring& error);
     void stopRecording();
     RecordingStatus recordingSnapshot()const;
+    bool setVirtualCamera(bool enabled,uint32_t fps,std::wstring& error);
+    bool uninstallVirtualCamera(std::wstring& error);
+    bool installVirtualCamera(std::wstring& error);
+    VirtualCameraStatus virtualCameraSnapshot()const;
+    // Instant replay (#103): while enabled, the last options.replaySeconds of
+    // whatever is presented stay in memory, across sessions; saveReplay()
+    // writes them to a new file in the background. Any thread.
+    bool setReplay(bool enabled,const RecordingSettings& options,std::wstring& error);
+    bool saveReplay(const std::wstring& directory,std::wstring& error);
+    RecordingStatus replaySnapshot()const;
     // Refresh/VRR state of monitors, shared by every session's presenter and
     // the UI; queried in the background on events only. Any thread.
     DisplayStateService& displayStates(){return displayStates_;}
@@ -311,6 +353,12 @@ private:
     // Live recorder: every session's presenter records into it; it owns its
     // encoder and writer threads. Created before the engine thread starts.
     std::unique_ptr<LiveRecorder> recorder_=std::make_unique<LiveRecorder>();
+    // The instant replay buffer, a second recorder; both take the presented
+    // frame through captures_.
+    std::unique_ptr<LiveRecorder> replay_=std::make_unique<LiveRecorder>(true);
+    PresentCaptureFanout recordingCaptures_{*recorder_,*replay_};
+    std::unique_ptr<VirtualCamera> virtualCamera_=std::make_unique<VirtualCamera>();
+    PresentCaptureFanout captures_{recordingCaptures_,*virtualCamera_};
     // Declared before worker_: it outlives the engine thread's presenters.
     DisplayStateService displayStates_;
     std::thread worker_;
@@ -324,6 +372,7 @@ private:
     EnhancementSettings desired_;uint64_t nextRevision_=1;
     std::optional<ChainRuntimeOrder> desiredNodeOrder_; // protected by mutex_, paired with desired_
     std::atomic<bool> stop_{false},paused_{false},muted_{false};
+    std::atomic<bool> captureAudioMonitoring_{true};
     std::atomic<float> volume_{1};uint64_t sessionId_=0;
     std::atomic<double> seekSeconds_{-1};
     std::atomic<double> requestedPlaybackRate_{1};

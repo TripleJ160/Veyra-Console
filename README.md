@@ -33,7 +33,7 @@ These steps describe the **locally built application**. First [build from source
 4. Start with **Originals**, **NR off / Reference**, AA off and **Fit**. After [runtime installation](docs/console/RUNTIMES.md), try **DLSS 2× — transport**. The viewing presets leave Performance/Lite off.
 5. For appearance, try **NR Subtle** and adjust **NR correction blend** in List → Quality. Reference turns NR off while retaining other effects.
 
-The launcher does not open a device, install drivers, change display settings or import another installation's preferences. Settings persist locally. Use the controller directly with the console; this binary excludes Remote Play, Moonlight and Xbox streaming clients.
+The launcher does not open a device, install drivers, change display settings or import another installation's preferences. Settings persist locally. Use the controller directly with the console; PS5 controller forwarding can optionally use a paired Remote Play connection while video/audio stay on the capture card. See [Odin / Artemis setup](docs/console/HANDHELD.md). Moonlight and Xbox source clients remain excluded from this private build.
 
 ## Keep other apps beside the console
 
@@ -49,7 +49,7 @@ This changes the window geometry, not the capture resolution, processing extent,
 
 ## Compared with upstream
 
-Exact baseline: **v2.1.5**, commit **dc6f6e1e5e51b31d027e4d369949332c130238de**, not “latest upstream.” History, attribution and notices are retained. Research recordings and machine-specific logs stay local; selected source and tests are published.
+Original fork baseline: **v2.1.5**. Updated on **2026-11-22** by merging upstream main **c6633121f27948bc297c35b033a88d854882dfc8** (2.2.0). The table below describes the original fork additions; newer upstream capabilities and integration validation are recorded in [the update report](docs/console/UPSTREAM_2.2.0.md). History, attribution and notices are retained. Research recordings and machine-specific logs stay local; selected source and tests are published.
 
 | Capability | Upstream baseline | This fork | Evidence or limitation |
 |---|---|---|---|

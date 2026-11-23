@@ -30,6 +30,10 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     using namespace veyra::engine;
 
+    check(resolveHdrDisplayPeakNits(0, 10000, false) == 0, "untrusted peak leaves curve at its reference");
+    check(resolveHdrDisplayPeakNits(0, 800, true) == 800, "plausible peak sets curve scaling");
+    check(resolveHdrDisplayPeakNits(600, 10000, false) == 600, "manual peak wins over display report");
+
     // ---- 1) the preset table itself ----
     check(kHdrTuningPresetCount >= 7, "presets: at least seven entries");
     for (std::size_t i = 0; i < kHdrTuningPresetCount; ++i) {
@@ -501,7 +505,7 @@ int main() {
         EnhancementSettings applied;
         if(restored.entries().size()==1)PresetLibrary::apply(restored.entries()[0],applied);
         check(applied.hdrCurve==s.hdrCurve&&applied.hdrMetadata==s.hdrMetadata&&applied.residual.total==5&&
-            applied.model.style==2&&applied.residual.correction.neutral==.31f&&applied.content==ContentRate::Fps30,
+            applied.model.style==2&&applied.residual.correction.neutral==.31f&&applied.content==ContentRate::Auto,
             "persist: HDR preset applies while retaining NR five, style controls and Flow");
         auto session=std::make_unique<ChainSession>(ChainSession::initial(s));
         check(session->select(ChainMode::Node),"persist: initialize separate node settings");

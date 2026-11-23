@@ -1,0 +1,59 @@
+name: Linux OBS filter checks
+on:
+  push:
+    branches: [main, 'codex/pr-integration-*']
+    paths: ['linux/obs/**', 'tests/obs-filter/**', 'CMakeLists.txt', '.github/workflows/obs-filter-checks.yml']
+  pull_request:
+    paths: ['linux/obs/**', 'tests/obs-filter/**', 'CMakeLists.txt', '.github/workflows/obs-filter-checks.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux-obs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          persist-credentials: false
+      - name: Install OBS development package
+        run: |
+          # Regional HTTP mirrors can stall for the entire job timeout. Keep the
+          # Ubuntu repositories, use their canonical HTTPS endpoints and bound retries.
+          sudo python3 - <<'PY'
+          from pathlib import Path
+          import re
+          paths = [Path('/etc/apt/sources.list'),
+                   *Path('/etc/apt/sources.list.d').glob('*.sources'),
+                   *Path('/etc/apt/sources.list.d').glob('*.list')]
+          for path in paths:
+              if not path.is_file():
+                  continue
+              text = path.read_text()
+              # Hosted runners may resolve Ubuntu through mirror+file, so changing
+              # only literal HTTP URLs leaves the slow regional mirror active.
+              text = text.replace('mirror+file:/etc/apt/apt-mirrors-security.txt',
+                                  'https://security.ubuntu.com/ubuntu')
+              text = text.replace('mirror+file:/etc/apt/apt-mirrors.txt',
+                                  'https://archive.ubuntu.com/ubuntu')
+              text = re.sub(r'https?://(?:[^/\s]+\.)?archive\.ubuntu\.com/ubuntu',
+                            'https://archive.ubuntu.com/ubuntu', text)
+              text = text.replace('http://security.ubuntu.com/ubuntu',
+                                  'https://security.ubuntu.com/ubuntu')
+              if 'mirror+file:/etc/apt/apt-mirrors' in text:
+                  raise RuntimeError('Unrecognized Ubuntu mirror indirection')
+              path.write_text(text)
+          PY
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends libobs-dev ninja-build
+      - name: Configure portable OBS module
+        run: cmake -S . -B out/obs -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Compile module and parser tests
+        run: cmake --build out/obs --parallel 2
+      - name: Reject malformed LUT files
+        run: ctest --test-dir out/obs --output-on-failure --timeout 30
+      - name: Verify install layout
+        run: |
+          DESTDIR="$PWD/out/stage" cmake --install out/obs --prefix /usr
+          test -f out/stage/usr/lib/obs-plugins/veyra-filter.so
+          test -f out/stage/usr/share/obs/obs-plugins/veyra-filter/veyra.effect

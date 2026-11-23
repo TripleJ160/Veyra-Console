@@ -20,6 +20,7 @@
 //
 // Scope note: this exposes what the engine can actually do today. Playback
 // speed measurement and requested file-preview rate are separate values.
+#include "veyra/engine/Subtitles.h"
 #include <QObject>
 #include <QString>
 #include <QRectF>
@@ -40,6 +41,7 @@ namespace veyra::ui {
 
 class MoonlightModel;
 class XboxModel;
+class LiveTranslation;
 
 class QmlPlayerBridge : public QObject {
     Q_OBJECT
@@ -48,6 +50,13 @@ class QmlPlayerBridge : public QObject {
     // measurement the getter says so. There is no "display fps": panel scanout
     // is not measured, and overlays such as RTSS also count Present calls, which
     // is the submit rate below (with its 1% low).
+    // Automatic FG and Dolby Vision: automatic frame-generation multiplier and
+    // the Dolby Vision follow / P7 composite switches.
+    Q_PROPERTY(bool fgAutoMultiplierEnabled READ fgAutoMultiplier WRITE setFgAutoMultiplier NOTIFY settingsChanged)
+    Q_PROPERTY(bool fgAutoMultiplierAvailable READ fgAutoMultiplierAvailable NOTIFY settingsChanged)
+    Q_PROPERTY(bool doviFollow READ doviFollow WRITE setDoviFollow NOTIFY settingsChanged)
+    Q_PROPERTY(bool doviP7Compose READ doviP7Compose WRITE setDoviP7Compose NOTIFY settingsChanged)
+    Q_PROPERTY(bool doviFollowAverage READ doviFollowAverage WRITE setDoviFollowAverage NOTIFY settingsChanged)
     Q_PROPERTY(QString outputSummary READ outputSummary NOTIFY snapshotChanged)
     Q_PROPERTY(QString srStageSummary READ srStageSummary NOTIFY snapshotChanged)
     Q_PROPERTY(QString srStageNote READ srStageNote NOTIFY snapshotChanged)
@@ -58,6 +67,7 @@ class QmlPlayerBridge : public QObject {
     Q_PROPERTY(QString flowBackend READ flowBackend NOTIFY snapshotChanged)
     Q_PROPERTY(int opticalFlowChoice READ opticalFlowChoice NOTIFY settingsChanged)
     Q_PROPERTY(QVariantList stageTimings READ stageTimings NOTIFY snapshotChanged)
+    Q_PROPERTY(QVariantList cpuTimings READ cpuTimings NOTIFY snapshotChanged)
     Q_PROPERTY(QVariantMap nodeTimings READ nodeTimings NOTIFY snapshotChanged)
     Q_PROPERTY(QVariantMap nodeAnchors READ nodeAnchors NOTIFY nodeAnchorsChanged)
     Q_PROPERTY(double stageBudgetMs READ stageBudgetMs NOTIFY snapshotChanged)
@@ -198,7 +208,7 @@ class QmlPlayerBridge : public QObject {
     Q_PROPERTY(QString remotePlayHost READ remotePlayHost WRITE setRemotePlayHost NOTIFY settingsChanged)
     Q_PROPERTY(QString remotePlayPin READ remotePlayPin WRITE setRemotePlayPin NOTIFY settingsChanged)
     // P4-e PS5 Remote Play, ported from the 1.4.4 panel: saved pairings (shared
-    // %LOCALAPPDATA%\Veyra\remoteplay, encrypted), discovery, pairing, PSN login,
+    // %LOCALAPPDATA%\Veyra\remoteplay, encrypted), discovery, pairing, Account ID lookup,
     // wake, stream profile, decode/sampling, view-only, login PIN, controller
     // forwarding and gyro calibration. `ps5` carries the form state.
     Q_PROPERTY(QVariantMap ps5 READ ps5 NOTIFY ps5Changed)
@@ -222,7 +232,7 @@ class QmlPlayerBridge : public QObject {
     Q_PROPERTY(QVariantMap preferences READ preferences NOTIFY preferencesChanged)
     Q_PROPERTY(QString gpuPriorityStatus READ gpuPriorityStatus NOTIFY preferencesChanged)
     Q_PROPERTY(bool enhancementPrewarmAvailable READ enhancementPrewarmAvailable CONSTANT)
-    // The interface language in use (zh-CN / zh-TW / en / ja), after "auto" is resolved;
+    // The interface language in use after "auto" is resolved;
     // preferences.language holds the choice itself.
     Q_PROPERTY(QString uiLanguage READ uiLanguage NOTIFY preferencesChanged)
     Q_PROPERTY(QString screenshotDirectory READ screenshotDirectory NOTIFY preferencesChanged)
@@ -230,12 +240,26 @@ class QmlPlayerBridge : public QObject {
     // Live recording of the processed picture: the engine owns the encoder and
     // the file, the interface shows the state and starts or stops it.
     Q_PROPERTY(bool recording READ recording NOTIFY recordingChanged)
+    Q_PROPERTY(bool virtualCameraEnabled READ virtualCameraEnabled NOTIFY virtualCameraChanged)
+    Q_PROPERTY(QVariantMap virtualCameraState READ virtualCameraState NOTIFY virtualCameraChanged)
+    Q_PROPERTY(int virtualCameraFps READ virtualCameraFps NOTIFY preferencesChanged)
     Q_PROPERTY(QVariantMap recordingState READ recordingState NOTIFY recordingChanged)
     Q_PROPERTY(QString recordingDirectory READ recordingDirectory NOTIFY preferencesChanged)
     Q_PROPERTY(int recordingBitrateMbps READ recordingBitrateMbps NOTIFY preferencesChanged)
     Q_PROPERTY(int recordingFpsLimit READ recordingFpsLimit NOTIFY preferencesChanged)
     Q_PROPERTY(bool recordingHevc READ recordingHevc NOTIFY preferencesChanged)
     Q_PROPERTY(bool recordingAudio READ recordingAudio NOTIFY preferencesChanged)
+    // Microphone (#101): mixed into the recorded sound, or on a track of its own.
+    Q_PROPERTY(bool recordingMicrophone READ recordingMicrophone NOTIFY preferencesChanged)
+    Q_PROPERTY(QString recordingMicrophoneId READ recordingMicrophoneId NOTIFY preferencesChanged)
+    Q_PROPERTY(bool recordingMicrophoneTrack READ recordingMicrophoneTrack NOTIFY preferencesChanged)
+    Q_PROPERTY(QVariantList microphoneDevices READ microphoneDevices NOTIFY microphoneDevicesChanged)
+    // Instant replay (#103): while enabled, the last replaySeconds of the
+    // presented picture and sound stay in memory; saveReplay() writes them
+    // next to the recordings.
+    Q_PROPERTY(bool replayEnabled READ replayEnabled NOTIFY preferencesChanged)
+    Q_PROPERTY(int replaySeconds READ replaySeconds NOTIFY preferencesChanged)
+    Q_PROPERTY(QVariantMap replayState READ replayState NOTIFY replayChanged)
     Q_PROPERTY(QString dataDirectory READ dataDirectory CONSTANT)
     // Rebindable shortcuts: action -> key sequence text (defaults merged in).
     Q_PROPERTY(QVariantMap shortcuts READ shortcuts NOTIFY preferencesChanged)
@@ -270,6 +294,9 @@ class QmlPlayerBridge : public QObject {
     // --- playback ----------------------------------------------------------
     Q_PROPERTY(bool deinterlaceAvailable READ deinterlaceAvailable CONSTANT)
     Q_PROPERTY(QString statusText READ statusText NOTIFY snapshotChanged)
+    Q_PROPERTY(bool timelineSeekable READ timelineSeekable NOTIFY snapshotChanged)
+    Q_PROPERTY(QVariantMap liveTimeshift READ liveTimeshift NOTIFY snapshotChanged)
+    Q_PROPERTY(bool openingSource READ openingSource NOTIFY snapshotChanged)
     Q_PROPERTY(bool running READ running NOTIFY snapshotChanged)
     Q_PROPERTY(bool paused READ paused NOTIFY snapshotChanged)
     Q_PROPERTY(bool failed READ failed NOTIFY snapshotChanged)
@@ -413,6 +440,9 @@ class QmlPlayerBridge : public QObject {
     Q_PROPERTY(int srOutput READ srOutput WRITE setSrOutput NOTIFY settingsChanged)
     Q_PROPERTY(bool protectionEnabled READ protectionEnabled WRITE setProtectionEnabled NOTIFY settingsChanged)
     Q_PROPERTY(QVariantMap protectionState READ protectionState NOTIFY protectionChanged)
+    Q_PROPERTY(bool exclusionOverlayVisible READ exclusionOverlayVisible WRITE setExclusionOverlayVisible NOTIFY protectionChanged)
+    Q_PROPERTY(QVariantMap exclusionState READ exclusionState NOTIFY protectionChanged)
+    Q_PROPERTY(QVariantMap nrStabilizerState READ nrStabilizerState NOTIFY nrStabilizerChanged)
     Q_PROPERTY(bool colorEnabled READ colorEnabled WRITE setColorEnabled NOTIFY settingsChanged)
     Q_PROPERTY(int audioOffsetMs READ audioOffsetMs WRITE setAudioOffsetMs NOTIFY settingsChanged)
     // 1.4.4 声音补偿: 0 自动(软件估算) / 1 手动 / 2 关闭; live sources only.
@@ -445,6 +475,11 @@ class QmlPlayerBridge : public QObject {
     Q_PROPERTY(bool dlssgLite READ dlssgLite WRITE setDlssgLite NOTIFY settingsChanged)
     // VFG 自动调控: EnhancementSettings::vfgAutoRegulate.
     Q_PROPERTY(bool vfgAutoRegulate READ vfgAutoRegulate WRITE setVfgAutoRegulate NOTIFY settingsChanged)
+    // 自适应倍率 / 帧节奏修复 / HUD 自动锁定 (ported from PushFPS): EnhancementSettings::
+    // fgAdaptive, pacingRepair and hudLock, global controls kept in shell preferences.
+    Q_PROPERTY(bool fgAdaptive READ fgAdaptive WRITE setFgAdaptive NOTIFY settingsChanged)
+    Q_PROPERTY(bool pacingRepair READ pacingRepair WRITE setPacingRepair NOTIFY settingsChanged)
+    Q_PROPERTY(bool hudLock READ hudLock WRITE setHudLock NOTIFY settingsChanged)
     Q_PROPERTY(bool dlssgLiteAvailable READ dlssgLiteAvailable CONSTANT)
     Q_PROPERTY(QString dlssgLiteHint READ dlssgLiteHint NOTIFY snapshotChanged)
     Q_PROPERTY(int contentRate READ contentRate WRITE setContentRate NOTIFY settingsChanged)
@@ -460,6 +495,9 @@ class QmlPlayerBridge : public QObject {
     // (switch greyed), 2 it can but the driver setting is off, 3 possible,
     // 4 active; vrrHint explains it beside the switch.
     Q_PROPERTY(bool variableRefresh READ variableRefresh WRITE setVariableRefresh NOTIFY presentationChanged)
+    // Explicit per-application driver setup, independent of the presentation switch.
+    Q_PROPERTY(QObject* nvidiaVrrProfile READ nvidiaVrrProfile CONSTANT)
+    Q_PROPERTY(QObject* liveTranslation READ liveTranslation CONSTANT)
     Q_PROPERTY(int vrrState READ vrrState NOTIFY perfChanged)
     Q_PROPERTY(QString vrrHint READ vrrHint NOTIFY perfChanged)
     // Display state of the shown monitor for the 信号 card: Windows HDR (-1
@@ -528,6 +566,7 @@ class QmlPlayerBridge : public QObject {
     Q_PROPERTY(QVariantList protectionRegions READ protectionRegions NOTIFY protectionChanged)
     Q_PROPERTY(QString protectionDrawShape READ protectionDrawShape NOTIFY protectionDrawChanged)
     Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY snapshotChanged)
+    Q_PROPERTY(double maximumVolume READ maximumVolume CONSTANT)
     Q_PROPERTY(bool muted READ muted WRITE setMuted NOTIFY snapshotChanged)
     Q_PROPERTY(double playbackSpeed READ playbackSpeed NOTIFY snapshotChanged)
     Q_PROPERTY(double playbackRate READ playbackRate WRITE setPlaybackRate NOTIFY snapshotChanged)
@@ -661,6 +700,7 @@ public:
     int opticalFlowChoice() const;
     Q_INVOKABLE bool setOpticalFlowChoice(int backend);
     QVariantList stageTimings() const;
+    QVariantList cpuTimings() const;
     QVariantMap nodeTimings() const;
     QVariantMap nodeAnchors() const;
     Q_INVOKABLE bool setNodeAnchor(const QString& key, double x, double y);
@@ -771,7 +811,8 @@ public:
     Q_INVOKABLE bool openCaptureDriverSettings(bool inputSelector = false);
     Q_INVOKABLE bool startCaptureSession();
     Q_INVOKABLE bool setScreenOption(const QString& key, const QVariant& value);
-    Q_INVOKABLE bool startScreenCapture();
+    Q_INVOKABLE bool startScreenCapture(bool cropPreview = false);
+    Q_INVOKABLE bool applyScreenCrop(int left, int top, int right, int bottom);
     bool gameMode() const;
     bool passthroughActive() const;
     bool gameInputActive() const;
@@ -829,9 +870,7 @@ public:
     Q_INVOKABLE bool ps5Connect();
     Q_INVOKABLE void ps5Wake();
     Q_INVOKABLE void ps5Forget();
-    Q_INVOKABLE void ps5PsnLogin();
-    Q_INVOKABLE void ps5PsnComplete();
-    Q_INVOKABLE void ps5PsnForget();
+    Q_INVOKABLE void ps5OpenAccountChecker();
     Q_INVOKABLE void ps5SendLoginPin(const QString& pin);
     Q_INVOKABLE void ps5Cancel();
     Q_INVOKABLE void ps5Calibrate();
@@ -876,7 +915,7 @@ public:
     Q_INVOKABLE bool presentationOverlayRunning() const;
     Q_INVOKABLE void openFeedbackPage();
     Q_INVOKABLE void openReleasesPage();
-    // 设置 → 赞助作者: opens the author's page for `id` (bilibili, douyin, x, github,
+    // 设置 → 赞助作者: opens the author's page for `id` (douyin, x, github,
     // youtube, kofi) in the browser. The addresses live here; any other id does nothing.
     Q_INVOKABLE bool openSponsorLink(const QString& id);
     QObject* updates() const;
@@ -898,6 +937,10 @@ public:
     // which values the UI can command and which it can only display.
     bool deinterlaceAvailable() const;
     QString statusText() const;
+    bool timelineSeekable() const;
+    QVariantMap liveTimeshift() const;
+    Q_INVOKABLE double timelineSeconds(double fraction) const;
+    Q_INVOKABLE void returnToLive();
     bool running() const;
     bool paused() const;
     bool failed() const;
@@ -943,6 +986,7 @@ public:
 
     bool applying() const;
     double volume() const;
+    double maximumVolume() const;
     void setVolume(double value);
     bool muted() const;
     void setMuted(bool value);
@@ -1092,6 +1136,20 @@ public:
     bool protectionEnabled() const;
     void setProtectionEnabled(bool value);
     QVariantMap protectionState() const;
+    QVariantMap exclusionState() const;
+    QVariantMap nrStabilizerState() const;
+    bool exclusionOverlayVisible() const;
+    void setExclusionOverlayVisible(bool visible);
+    Q_INVOKABLE void selectExclusionRegion(int index);
+    Q_INVOKABLE bool beginExclusionMove(double x,double y);
+    Q_INVOKABLE void updateExclusionMove(double x,double y);
+    Q_INVOKABLE bool endExclusionMove(bool commit);
+    Q_INVOKABLE bool beginMaskDraw(bool allEffects,const QString& shape);
+    Q_INVOKABLE bool setMaskEnabled(bool allEffects,bool enabled);
+    Q_INVOKABLE bool setMaskFeather(bool allEffects,double pixels);
+    Q_INVOKABLE bool removeMaskRegion(bool allEffects,int index);
+    Q_INVOKABLE bool clearMaskRegions(bool allEffects);
+    Q_INVOKABLE bool setStabilizerParameter(int index,const QString& key,double value);
     Q_INVOKABLE bool setProtectionRegion(double left, double top, double right, double bottom, double feather);
     bool colorEnabled() const;
     void setColorEnabled(bool value);
@@ -1128,6 +1186,12 @@ public:
     void setDlssgLite(bool value);
     bool vfgAutoRegulate() const;
     void setVfgAutoRegulate(bool value);
+    bool fgAdaptive() const;
+    void setFgAdaptive(bool value);
+    bool pacingRepair() const;
+    void setPacingRepair(bool value);
+    bool hudLock() const;
+    void setHudLock(bool value);
     bool dlssgLiteAvailable() const;
     QString dlssgLiteHint() const;
     int contentRate() const;
@@ -1135,6 +1199,8 @@ public:
     int displaySync() const;
     void setDisplaySync(int value);
     bool variableRefresh() const;
+    QObject* nvidiaVrrProfile() const { return nvidiaVrrProfile_; }
+    QObject* liveTranslation() const;
     void setVariableRefresh(bool value);
     int vrrState() const;
     QString vrrHint() const;
@@ -1330,6 +1396,10 @@ public:
     Q_INVOKABLE void openFileDialog();
     Q_INVOKABLE void openNetworkDialog();
     Q_INVOKABLE bool openNetworkAddress(const QString& address);
+    // Custom (Chrome bridge): pull the player window to the foreground. The
+    // browser extension calls this before every /play so a click always shows
+    // the picture, even when Veyra was behind the browser.
+    Q_INVOKABLE void bringToFront();
     Q_INVOKABLE void openPath(const QString& path);
     Q_INVOKABLE void openCaptureDialog();
     // Reopens the last capture session with the same device and format.
@@ -1358,10 +1428,21 @@ public:
     // only opens the file when the request reaches it.
     // source names the trigger in the log ("shortcut", "pro-button", "game-hotkey").
     Q_INVOKABLE void startRecording(const QString& source = QString());
+    Q_INVOKABLE void setVirtualCameraEnabled(bool enabled);
+    Q_INVOKABLE void uninstallVirtualCamera();
+    Q_INVOKABLE void installVirtualCamera();
+    bool virtualCameraEnabled()const;
+    QVariantMap virtualCameraState()const;
+    int virtualCameraFps()const;
+    void pollVirtualCamera();
     Q_INVOKABLE void stopRecording(const QString& source = QString());
     Q_INVOKABLE void toggleRecording(const QString& source = QString());
     Q_INVOKABLE void chooseRecordingDirectory();
     Q_INVOKABLE void openRecordingDirectory();
+    // Writes what the replay buffer holds now (source as for recording).
+    Q_INVOKABLE void saveReplay(const QString& source = QString());
+    // Lists the recording endpoints for the microphone choice.
+    Q_INVOKABLE void refreshMicrophones();
     bool recording() const;
     QVariantMap recordingState() const;
     QString recordingDirectory() const;
@@ -1369,6 +1450,13 @@ public:
     int recordingFpsLimit() const;
     bool recordingHevc() const;
     bool recordingAudio() const;
+    bool recordingMicrophone() const;
+    QString recordingMicrophoneId() const;
+    bool recordingMicrophoneTrack() const;
+    QVariantList microphoneDevices() const;
+    bool replayEnabled() const;
+    int replaySeconds() const;
+    QVariantMap replayState() const;
     Q_INVOKABLE void chooseExportPath();
     // The export target without the dialog (the dialog's result, or --export-out in a test).
     void setExportPath(const QString& path);
@@ -1427,7 +1515,26 @@ public:
     // Re-reads the runtime manifest (Settings → 组件与许可 calls it when shown).
     Q_INVOKABLE void refreshComponentList();
 
+    void showFormatBadge(const engine::PlayerSnapshot& snapshot);
+
+    void maybeApplyFgAutoMultiplier();
+
+    void setFgAutoMultiplier(bool value);
+    bool fgAutoMultiplierAvailable() const;
+    bool fgAutoMultiplier() const;
+
+    void applyFgMultiplier(int multiplier);
+
+    bool doviFollow() const;
+    void setDoviFollow(bool on);
+    bool doviP7Compose() const;
+    void setDoviP7Compose(bool on);
+    bool doviFollowAverage() const;
+    void setDoviFollowAverage(bool on);
+
 signals:
+    void mediaOpenRequested(); // Synchronous intent, before opening or waiting for success.
+
     void playlistRequested();
     void nodeAnchorsChanged();
     void ps5Changed();
@@ -1439,6 +1546,9 @@ signals:
     void subtitleTextChanged();
     void preferencesChanged();
     void recordingChanged();
+    void virtualCameraChanged();
+    void replayChanged();
+    void microphoneDevicesChanged();
     void colourLibraryChanged();
     // Emitted only when the underlying snapshot actually changed, so QML
     // bindings do not re-evaluate 60 times a second for nothing.
@@ -1462,6 +1572,7 @@ signals:
     void beautyChanged();
     void colourParamsChanged();
     void protectionChanged();
+    void nrStabilizerChanged();
     void recentFilesChanged();
     void presetsChanged();
     void exportChanged();
@@ -1491,8 +1602,13 @@ private:
     void emitParameterChanged(void (QmlPlayerBridge::*group)(), bool wasValid);
     void updateGameMode();
     void updateGameGeometry();
-    // Game mode's keyboard hook gets the current panel, exit, screenshot and record keys.
+    // Game mode's keyboard hook gets the current panel, exit, screenshot, record and replay keys.
     void applyGameHotkeys();
+    // The recording settings both recorders follow, and the replay buffer
+    // armed (or not) with them; its state for the interface.
+    engine::RecordingSettings recordingOptions() const;
+    void syncReplay();
+    void pollReplay();
     // DLAA anti-aliasing needs the DLSS SR runtime and adapter; false (with a notice) otherwise.
     bool dlaaAllowed();
     // 抖音直播伴侣 running (gfx/PresentationHooks.h): Realtime GPU priority is capped at
@@ -1510,12 +1626,15 @@ private:
     QString vrrSummaryText(int level) const;
     void applyPresentation();
     void applyAspect(bool force);
-    // Live sources started from the start page: switch to 极简 first, show the
-    // connecting note, and start the engine once the page and window have settled.
-    void openAfterCinema(const QString& pending, std::function<void()> open);
+    // From Home, show the destination and connection note before opening the
+    // live source so the video viewport has time to settle.
+    void openAfterLivePage(const QString& pending, std::function<void()> open,
+                           const QString& homeTarget = QStringLiteral("min"));
     void rememberSource(const QString& kind, const QString& label);
-    // Edits the list chain's protection node; rolls back when refused.
-    bool editProtection(const std::function<bool(engine::ChainNode&)>& edit);
+    // Edits either mask node in the active chain; rolls back when refused.
+    void updateMaskOverlay();
+    QVariantMap maskState(bool allEffects) const;
+    bool editProtection(const std::function<bool(engine::ChainNode&)>& edit,bool allEffects=false);
     engine::ColorSettings selectedColourSettings() const;
     bool commitColour(const engine::ColorSettings& colour);
     // Reads the export job's snapshot and emits exportChanged.
@@ -1552,6 +1671,8 @@ private:
 
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    QObject* nvidiaVrrProfile_ = nullptr;
+    LiveTranslation* liveTranslation_ = nullptr;
     QObject* updates_ = nullptr;
 };
 

@@ -50,10 +50,10 @@ VPage {
         valueRole: "id"
         currentIndex: Math.max(0, options.findIndex(o => String(o.id) === selected))
         implicitWidth: 172
-        implicitHeight: 30
+        implicitHeight: Math.max(30, contentItem.implicitHeight + 8)
         onActivated: index => picked(String(options[index].id))
         background: Rectangle { radius: 8; color: Theme.card2; border.color: Theme.stroke2 }
-        contentItem: Text { leftPadding: 10; rightPadding: 24; verticalAlignment: Text.AlignVCenter; text: choice.currentText; color: Theme.t1; elide: Text.ElideRight; font.family: Theme.fontUi; font.pixelSize: 12 }
+        contentItem: Text { leftPadding: 10; rightPadding: 24; verticalAlignment: Text.AlignVCenter; text: choice.currentText; color: Theme.t1; wrapMode: Text.Wrap; font.family: Theme.fontUi; font.pixelSize: 12 }
         indicator: VIcon { x: choice.width - 22; y: 8; name: "down"; size: 14; color: Theme.t3 }
         popup: Popup {
             id: choicesPopup
@@ -78,11 +78,11 @@ VPage {
                 delegate: Basic.ItemDelegate {
                     required property var modelData
                     required property int index
-                    width: list.width; height: 32
+                    width: list.width; height: Math.max(32, contentItem.implicitHeight + 8)
                     enabled: modelData.disabled !== true
                     highlighted: index === choice.currentIndex
                     background: Rectangle { radius: 5; color: parent.highlighted ? Theme.card3 : "transparent" }
-                    contentItem: Text { text: modelData.label; color: Theme.t1; font.family: Theme.fontUi; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
+                    contentItem: Text { text: modelData.label; color: Theme.t1; font.family: Theme.fontUi; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; wrapMode: Text.Wrap }
                     onClicked: { choice.picked(String(modelData.id)); choicesPopup.close() }
                 }
             }
@@ -550,7 +550,8 @@ VPage {
                 }
                 Timer {
                     id: exportScrub
-                    interval: 120
+                    // Restarted on every move (see CineBar.qml).
+                    interval: 250
                     onTriggered: if (timeline.scrubbing) veyra.seekTo(timeline.scrubFrac * veyra.duration)
                 }
                 MouseArea {
@@ -559,8 +560,8 @@ VPage {
                     cursorShape: Qt.PointingHandCursor
                     preventStealing: true
                     function f(x) { return Math.max(0, Math.min(1, x / Math.max(1, timeline.width))) }
-                    onPressed: mouse => { timeline.scrubFrac = f(mouse.x); timeline.scrubbing = true; exportScrub.start() }
-                    onPositionChanged: mouse => { if (timeline.scrubbing) { timeline.scrubFrac = f(mouse.x); if (!exportScrub.running) exportScrub.start() } }
+                    onPressed: mouse => { timeline.scrubFrac = f(mouse.x); timeline.scrubbing = true }
+                    onPositionChanged: mouse => { if (timeline.scrubbing) { timeline.scrubFrac = f(mouse.x); exportScrub.restart() } }
                     onReleased: mouse => { exportScrub.stop(); timeline.scrubbing = false; veyra.seekTo(f(mouse.x) * veyra.duration) }
                     onCanceled: { exportScrub.stop(); timeline.scrubbing = false }
                 }

@@ -1,3 +1,5 @@
+> **2026-11-22 update:** the Console source now includes upstream 2.2.0 through c6633121. The updated private build enables native PS5 Remote Play for controller forwarding; the historical command below disables it. To reproduce the handheld build, enable VEYRA_ENABLE_REMOTEPLAY, provision the pinned Chiaki source plus all four reviewed patches with scripts/remoteplay/build-native.ps1, and provide static SDL3 3.4.14 and the matching native dependencies listed in scripts/remoteplay/dependency-lock.json. Use display label 2.2.0-console.3. libdovi was explicitly disabled in this capture-focused local build. See [integration details and validation](UPSTREAM_2.2.0.md). No public Windows binary is added by this update.
+
 # Reproduce the Windows build
 
 This is a Windows x64 C++20 / D3D12 / Qt Quick application. Use the release tag `v2.1.5-console.2` and its manifest's exact source commit. The public branch preserves upstream v2.1.5 history; machine-specific research scripts/profiles are not prerequisites.

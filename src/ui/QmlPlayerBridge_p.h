@@ -6,6 +6,7 @@
 #include "veyra/gfx/PresentSink.h"
 #include "veyra/gfx/NvidiaVrr.h"
 #include "veyra/media/NetworkInput.h"
+#include "veyra/media/FormatBadgeWindow.h"
 #include "veyra/ngx/DlssgLite.h"
 #include "veyra/RuntimePaths.h"
 #include "veyra/ui/GamePassthrough.h"
@@ -90,7 +91,6 @@
 #include "veyra/remoteplay/ControllerInput.h"
 #include "veyra/remoteplay/Discovery.h"
 #include "veyra/remoteplay/ProfileStore.h"
-#include "veyra/remoteplay/PsnAuth.h"
 #include "veyra/source/RemotePlaySource.h"
 #endif
 #ifdef VEYRA_ENABLE_XBOX
@@ -209,6 +209,10 @@ struct QmlPlayerBridge::Impl {
     engine::EngineController& engine;
     PlayerUiFacade facade;
 
+    // Announce the format when a new source first delivers a picture.
+    std::unique_ptr<media::FormatBadgeWindow> formatBadge;
+    uint64_t formatBadgeSession = 0;
+
     // Last published snapshot and the revision it came from. Polling compares
     // revisions, so an unchanged snapshot costs one comparison per tick.
     engine::PlayerSnapshot snapshot;
@@ -274,7 +278,7 @@ struct QmlPlayerBridge::Impl {
     int thumbnailGeneration = 0;
     // The live source kind and label ("" for a file), for the page headers.
     QString liveKind, liveLabel;
-    // A live open waiting for the 极简 switch to settle (openAfterCinema); the
+    // A live open waiting for the destination page to settle; the
     // generation lets a newer open or a stop cancel it.
     int liveOpenGen = 0;
     QString pendingLiveText;
@@ -325,6 +329,7 @@ struct QmlPlayerBridge::Impl {
     QString currentPage;
     std::wstring captureDevice;
     QString screenTarget;
+    bool screenCropPreview = false;
     QString remotePlayHost, remotePlayPin;
 
     QTimer* timer = nullptr;
@@ -370,7 +375,12 @@ struct QmlPlayerBridge::Impl {
     QVariantMap prefs;
     // Live recording state published by the engine (see LiveRecorder.h).
     QVariantMap recordingState;
+    QVariantMap virtualCameraState;
     uint64_t recordingSaved = 0;   // LiveRecorder's finished-file counter already announced
+    QVariantMap replayState;       // the instant replay buffer (#103)
+    uint64_t replaySaved = 0;      // its saved-clip counter already announced
+    QVariantList microphones;      // recording endpoints, {id, label}
+    QString microphoneNotice;      // the microphone failure last announced
   // Custom: the display whose HDR curve is currently applied (see syncHdrDisplayProfile).
   QString hdrProfileDisplay;
   // Custom: the title whose curve is currently applied (see syncHdrTitleProfile).
@@ -459,9 +469,8 @@ struct QmlPlayerBridge::Impl {
     QString ps5Status;
     std::wstring ps5Profile;                 // file name inside profileDirectory()
     QVariantList ps5ProfileList;
-    uint64_t psnLoginStarted = 0;
     bool ps5Watching = false;
-    struct Ps5Outcome { std::wstring message; std::vector<std::pair<std::string, std::string>> hosts; std::wstring savedPath; std::string account; bool refreshProfiles = false; };
+    struct Ps5Outcome { std::wstring message; std::vector<std::pair<std::string, std::string>> hosts; std::wstring savedPath; bool refreshProfiles = false; };
     std::mutex ps5Mutex;
     Ps5Outcome ps5Outcome;
     std::atomic<bool> ps5Done{false};
@@ -509,7 +518,13 @@ struct QmlPlayerBridge::Impl {
     int audioPollTicks = 0;
     // --- protection drawing (#8) ---
     QString protDraw;                         // "" | rect | ellipse
+    bool protExclusion=false;
     HWND protOverlay = nullptr;
+    int exclusionSelected = -1;
+    bool exclusionDragging = false;
+    engine::ProtectionRect exclusionOriginal{}, exclusionPreview{};
+    std::pair<float,float> exclusionDragStart{};
+    QVariantList maskOverlayGeometry; // Repaint only when view, geometry or selection changes.
     // --- performance orbs / status light (#13) ---
     ui::live_status::DashboardHistory history;
     int historyTicks = 0;
@@ -624,19 +639,28 @@ struct QmlPlayerBridge::Impl {
     uint64_t aspectSession = 0;
     std::jthread gpuSampler;                 // joined before gpuUtil goes away
     std::filesystem::path prefsFile() const { return dataDir / L"qml-preferences.v1.json"; }
+    // The file exists but was not read (locked by antivirus/OneDrive, or damaged):
+    // saving the in-memory defaults would replace every saved setting with them.
+    bool prefsUnreadable = false;
     void loadPrefs() {
         QFile file(QString::fromStdWString(prefsFile().wstring()));
         if (!file.exists()) return;
-        if (!file.open(QIODevice::ReadOnly)) { veyra::log::warn("ui-prefs", "qml preferences unreadable; defaults used"); return; }
+        if (!file.open(QIODevice::ReadOnly)) {
+            prefsUnreadable = true;
+            veyra::log::warn("ui-prefs", "qml preferences unreadable; defaults used, file kept, saving disabled this session");
+            return;
+        }
         QJsonParseError error{};
         const auto doc = QJsonDocument::fromJson(file.readAll(), &error);
         if (error.error != QJsonParseError::NoError || !doc.isObject()) {
-            veyra::log::warn("ui-prefs", "qml preferences damaged; defaults used, file kept");
+            prefsUnreadable = true;
+            veyra::log::warn("ui-prefs", "qml preferences damaged; defaults used, file kept, saving disabled this session");
             return;
         }
         prefs = doc.object().toVariantMap();
     }
     bool savePrefs() {
+        if (prefsUnreadable) return false;
         const QString path = QString::fromStdWString(prefsFile().wstring());
         // A fresh data directory may not exist yet: the first preference saved
         // on a new profile used to fail and was silently kept only in memory.
@@ -713,7 +737,9 @@ struct QmlPlayerBridge::Impl {
                     initial.opticalFlowBackend=engine::OpticalFlowBackend::AmdFidelityFx;
                     initial.videoSrQuality=engine::kVideoSrFsr;
                 }
-                initial.frameGenerationBackend=engine::defaultFrameGenerationBackend(desc.VendorId);
+                // RX 9000 starts on FSR 4 ML (the same name rule as its menu gate, effectGpu()).
+                initial.frameGenerationBackend=engine::defaultFrameGenerationBackend(desc.VendorId,
+                    QString::fromWCharArray(desc.Description).contains(QStringLiteral("RX 90"),Qt::CaseInsensitive));
                 facade.setPending(initial);
                 veyra::log::info("nr-default",std::format("adapter={} selected={}",utf8Of(std::wstring(desc.Description)).toStdString(),engine::nrRuntimeName(initial.nrRuntime)));
                 break;
@@ -849,6 +875,7 @@ struct QmlPlayerBridge::Impl {
     // The chain is the source of truth for the stage settings; every commit
     // writes it back over the struct so the two can never disagree.
     bool commit(engine::EnhancementSettings settings) {
+        settings.content=engine::currentContentRate(settings.content);
         // Custom: the static HDR output tuning belongs to neither transaction, so
         // keep the draft globals in sync in BOTH modes. Only the node branch below
         // refreshed them, which is why a change made in list mode took effect and
@@ -925,6 +952,7 @@ struct QmlPlayerBridge::Impl {
             }
         }
         engine::fromChain(*projected, s);
+        s.content=engine::currentContentRate(s.content);
         if(const auto error=s.validate();!error.empty()){
             veyra::log::error("qml-settings",error);
             validation={false,"效果参数无效，未提交；详见诊断日志"};return false;
@@ -962,6 +990,12 @@ struct QmlPlayerBridge::Impl {
     int xboxStatsTicks = 0;
     std::unique_ptr<ui::XboxModel> xbox;   // last: joins its worker first
 #endif
+
+    // Last published snapshot and the revision it came from. Polling compares
+    // revisions, so an unchanged snapshot costs one comparison per tick.
+
+    // The chain the UI edits, kept in step with the facade's pending settings.
+    uint64_t fgAutoSession = 0;       // 已为哪个会话决定过档位
 };
 
 

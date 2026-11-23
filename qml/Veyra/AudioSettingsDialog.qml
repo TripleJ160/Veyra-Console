@@ -76,7 +76,8 @@ DialogLayer {
             value: Math.round(veyra.volume * 100) + "%"
             VSlider {
                 implicitWidth: 170
-                from: 0; to: 1; value: veyra.volume; inputScale: 100
+                from: 0; to: veyra.maximumVolume; value: veyra.volume; inputScale: 100
+                defaultValue: 1
                 onMoved: veyra.volume = value
             }
         }
@@ -85,6 +86,18 @@ DialogLayer {
             VSwitch {
                 checked: veyra.muted
                 onToggled: checked => veyra.muted = checked
+            }
+        }
+    }
+    DialogGroup {
+        visible: veyra.sourceKind === "capture"
+        VRow {
+            label: qsTr("本机音频监听")
+            hint: qsTr("关闭后仍可录制和保存回放；本机不播放采集声音")
+            VSwitch {
+                objectName: "audio-capture-monitor"
+                checked: veyra.preferences.captureAudioMonitor !== false
+                onToggled: v => veyra.setPreference("captureAudioMonitor", v)
             }
         }
     }

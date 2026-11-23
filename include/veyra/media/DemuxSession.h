@@ -52,6 +52,11 @@ public:
         NetworkSettings settings;
         const std::atomic<bool>* cancelled = nullptr;  // owner stop (engine): aborts every blocking call
         int audioStream = -2;                          // -2 best audio, -1 none, >=0 explicit
+        // Where the first packet should come from, in seconds. Seeking during open, before
+        // the demux thread starts, means the first buffered window is already at that
+        // position: opening at 0 and seeking afterwards made playback buffer the start of
+        // the file and then the target, which showed up as two prebuffer rounds.
+        double startSeconds = 0.0;
     };
     // Connects and probes (bounded by the connect/probe limits and `cancelled`),
     // then starts the demux thread. Null with `error` set on failure.
@@ -64,9 +69,15 @@ public:
     const std::vector<SessionStreamInfo>& streams() const { return streams_; }
     const SessionStreamInfo* stream(int index) const { return index >= 0 && size_t(index) < streams_.size() ? &streams_[size_t(index)] : nullptr; }
     int videoStream() const { return videoIndex_; }
+    // Container start time in microseconds (0 when unset). Packet PTS values are
+    // absolute in the container timeline; subtracting this yields media-relative
+    // time, which is what duration and seeking use.
+    int64_t startTimeUs() const { return startTimeUs_; }
     int audioStream() const { return audioIndex_.load(); }
     bool live() const { return live_; }
     bool seekable() const { return !live_; }
+    bool timeshiftEnabled() const { return timeshiftUs_ > 0; }
+    bool takeTimeshiftOverrun();
     int64_t durationUs() const { return durationUs_; }
     int64_t containerBitRate() const { return containerBitRate_; }
     const std::string& formatName() const { return formatName_; }
@@ -84,6 +95,11 @@ public:
     // waitMs for one. Video honours the buffering hold (Empty while playback is
     // paused for buffering) only when asked: offline readers pass false.
     Pop popVideo(AVPacket* dst, Meta& meta, int waitMs, bool honourHold);
+    // Enhancement-layer stream (a second HEVC video stream): some Dolby test
+    // material keeps the layer as its own stream instead of type-63 NALs inside
+    // the base stream. Popped without the buffering hold: it is a side channel.
+    Pop popEl(AVPacket* dst, Meta& meta, int waitMs);
+    int elIndex() const { return elIndex_; }
     Pop popAudio(AVPacket* dst, Meta& meta, int waitMs);
     // Audio packets are queued only for the selected stream; -1 drops them all.
     bool selectAudioStream(int index);
@@ -112,6 +128,7 @@ private:
         int64_t startUs = 0, endUs = 0;
         int64_t dtsUs = INT64_MIN;       // AV_NOPTS_VALUE when the container gave none
         size_t bytes = 0;
+        size_t retained = 0;
     };
     struct Queue {
         std::deque<Item> items;
@@ -122,7 +139,14 @@ private:
         int64_t lastDtsUs = INT64_MIN;   // decode time of the last packet queued (resume de-duplication)
         bool ended = false;
         bool dedupe = false;             // after a VOD reconnect: drop packets at or before lastDtsUs
+        size_t next = 0, retainedBytes = 0;
+        bool empty() const { return next == items.size(); }
+        size_t pending() const { return items.size() - next; }
+        const Item& front() const { return items[next]; }
         void clear();
+        bool take(AVPacket* packet, Meta& meta, bool retain);
+        bool evict();
+        void rewind(size_t cursor);
     };
     struct Interrupt;
     struct FileAvio;
@@ -135,10 +159,12 @@ private:
     void applyDiscardFlags();
     bool verifyStreams();
     void onPacket(AVPacket* packet);
-    bool pushLocked(Item&& item, bool video);
+    bool pushLocked(Item&& item, bool video, bool el = false);
     bool recover(int code, const char* why);
     void doSeek();
     bool flowBlockedLocked() const;
+    void trimTimeshiftLocked();
+    bool seekTimeshiftLocked(int64_t targetUs);
     void fail(const std::wstring& message);
     void flushPendingAudio(int64_t anchorUs);
 
@@ -174,11 +200,18 @@ private:
     std::unique_ptr<Interrupt> irq_;
     std::unique_ptr<FileAvio> file_;
     AVFormatContext* context_ = nullptr;   // demux thread only
-    bool network_ = false;                 // http/https/rtsp (otherwise a file)
+    int64_t startTimeUs_ = 0;
+    bool network_ = false;
+    int64_t timeshiftUs_ = 0, timelineStartUs_ = 0;
+    bool timeshiftOverrun_ = false;
 
-    Queue video_, audio_;
+    Queue video_, audio_, el_;
+    int elIndex_ = -1;
     Phase phase_ = Phase::Prebuffering;
     double targetSeconds_ = 0;
+    // Where this session should start, in seconds; set once at open and used to position
+    // the context before the demux thread runs.
+    double startSeconds_ = 0;
     bool afterSeek_ = false;
     int64_t playbackUs_ = -1;              // hint from the player (media timeline)
     bool hasHint_ = false;                 // the player supplies playbackUs_; otherwise consumption is the position

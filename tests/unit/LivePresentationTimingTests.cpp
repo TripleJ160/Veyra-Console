@@ -12,9 +12,13 @@
 #include <array>
 #include <vector>
 #include "veyra/engine/FrameRateWindow.h"
+#include "veyra/engine/FrameFlowWindow.h"
+#include "veyra/engine/ProviderSubmissionCounter.h"
+#include "veyra/ui/MaskGeometry.h"
 #include "veyra/engine/PresentationScheduler.h"
 #include "veyra/engine/PresentationSettings.h"
 #include <cmath>
+#include <chrono>
 #include <limits>
 #include <cstdio>
 int main(){
@@ -22,6 +26,20 @@ int main(){
     int failed=0;
     auto check=[&](bool ok,const char* label){printf("%s %s\n",ok?"PASS":"FAIL",label);if(!ok)++failed;};
     using veyra::engine::CaptureHalfRate;
+    {
+        using namespace veyra;
+        const engine::ProtectionRect region{.1f,.2f,.45f,.65f,false};
+        for(unsigned turn=0;turn<4;++turn)for(int mode:{0,1,2,3,4,5,6})for(float zoom:{.6f,1.f,2.4f}){
+            engine::PreviewView view;view.userQuarterTurns=turn;view.mode=mode;view.zoom=zoom;view.centerX=.35f;view.centerY=.62f;
+            const auto b=ui::mask::hostBounds(region,view,1100,700,1920,1080);
+            const auto center=view.sourcePoint((b[0]+b[2])*.5f,(b[1]+b[3])*.5f,1100,700,1920,1080);
+            check(std::abs(center.first-.275f)<1e-5f&&std::abs(center.second-.425f)<1e-5f,"mask overlay inverse matches presenter under rotation/aspect/zoom/pan");
+        }
+        const auto edge=ui::mask::moved(region,5,-5);
+        check(std::abs(edge.right-1)<1e-6f&&std::abs(edge.top)<1e-6f&&std::abs((edge.right-edge.left)-.35f)<1e-6f,"drag clamps to source boundary preserving region size");
+        auto ellipse=region;ellipse.ellipse=true;
+        check(!ui::mask::contains(ellipse,.101f,.201f)&&ui::mask::contains(ellipse,.275f,.425f),"ellipse selection rejects bounding-box corners");
+    }
     for(int64_t interval:{166667LL,333333LL}){
         veyra::engine::PresentationScheduler scheduler;
         veyra::engine::PresentationCadence cadence;
@@ -77,8 +95,67 @@ int main(){
         // 45 fps in 60 Hz (new,new,new,repeat): never three second copies in a row.
         std::vector<int> fortyFive;
         check(run([](int i){return uint64_t(i-i/4);},0,600,fortyFive)==0&&fortyFive.size()==300,"irregular content keeps the plain grid");
+        // A still screen is no evidence that the half-rate grid sits on second
+        // copies. Resuming with true 60 fps must not insert an extra sample.
+        // The still starts with a hitch window (samples 242-244 repeat the
+        // picture kept at 240 and are skipped); from 245 it is held on the grid:
+        // 120 moving + 89 still + 150 at 60 fps.
+        CaptureHalfRate still;unsigned stillKept=0;
+        for(int i=0;i<720;++i){
+            const uint64_t id=i<240?uint64_t(i/2):i<421?1000:uint64_t(1000+i-420);
+            stillKept+=still.accept(i*dt,dt,false,&id);
+        }
+        check(still.shifts()==0&&stillKept==359&&still.repeatsSkipped()==CaptureHalfRate::kHitchSlots-2,
+              "half-rate still-to-60 transition does not mistake a hold for second-copy phase");
+        // Below 30 (issue #152): a 30 fps-capped game at 29-24 fps shows its
+        // pictures two or three times. The plain grid kept 31-32 per second,
+        // several of them the picture it had just kept, which frame generation
+        // turned into stalls. Each picture is now kept exactly once and kept
+        // samples are never adjacent.
+        for(double fps:{29.0,28.0,26.0,24.0})for(bool sequenced:{true,false}){
+            CaptureHalfRate sampler;std::vector<uint64_t> keptIds;int last=-2;bool spaced=true;
+            constexpr int samples=1200;
+            for(int i=0;i<samples;++i){
+                const uint64_t id=uint64_t(i*fps/60);
+                if(sampler.accept(i*dt+(sequenced?0:(i%3-1)*1000),dt,false,&id,sequenced?uint64_t(i+1):0)){
+                    spaced&=i-last>=2;last=i;keptIds.push_back(id);
+                }
+            }
+            bool once=true;for(size_t n=0;n<keptIds.size();++n)once&=keptIds[n]==n;
+            const auto pictures=uint64_t((samples-1)*fps/60)+1;
+            check(once&&keptIds.size()+1>=pictures&&spaced&&sampler.shifts()==0,
+                  "below-30 content keeps each picture once, never a repeat or an adjacent sample");
+        }
+        {
+            // A freeze past the hitch window (picture 20 on samples 40-47) is
+            // held on the grid from kHitchSlots after its keep, as a still screen.
+            CaptureHalfRate sampler;std::vector<int> repeats;uint64_t lastKept=~0ull;
+            for(int i=0;i<120;++i){
+                const uint64_t id=i<40?uint64_t(i/2):i<48?20:uint64_t(21+(i-48)/2);
+                if(sampler.accept(i*dt,dt,false,&id,uint64_t(i+1))){if(id==lastKept)repeats.push_back(i);lastKept=id;}
+            }
+            check(repeats==std::vector<int>{45,47}&&sampler.repeatsSkipped()==3&&sampler.repeatsHeld()==2,
+                  "a freeze longer than the hitch window is held on the grid");
+        }
     }
     check(!CaptureHalfRate::supported(30)&&!CaptureHalfRate::supported(18)&&!CaptureHalfRate::supported(120)&&CaptureHalfRate::supported(59.94),"60-to-30 setting does not halve other transport modes");
+    {
+        constexpr int64_t dt=166667;
+        CaptureHalfRate sampler;unsigned kept=0;bool spaced=true;int last=-2;
+        for(int i=1;i<=1200;++i){
+            // The card still sends 60 callbacks: its reported PTS runs 25% fast.
+            if(sampler.accept(i*208333,dt,false,nullptr,uint64_t(i))){++kept;spaced&=i-last>=2;last=i;}
+        }
+        check(kept==600&&spaced,"half-rate uses callback sequence despite driver timestamp drift");
+        CaptureHalfRate late;last=-2;spaced=true;
+        for(int i=1;i<=600;++i){
+            if(i%11==0)continue; // reader missed an input; don't invent a source reset
+            if(late.accept(i*dt,dt,false,nullptr,uint64_t(i))){spaced&=i-last>=2;last=i;}
+        }
+        check(spaced,"half-rate mailbox misses never trigger an adjacent catch-up sample");
+        check(!veyra::engine::presentationGenerationResetRequired(false,static_cast<veyra::pipeline::FrameFlags>(veyra::pipeline::FrameFlagBits::Drop)),
+              "mailbox-only loss is not a new cadence or presentation generation");
+    }
     veyra::engine::FrameRateWindow rate;rate.reset(0);
     for(int i=1;i<=60;++i)rate.complete(i*166666);
     check(std::abs(rate.rate(10000000)-60)<.01,"one second counts 60 actual completion events");
@@ -88,6 +165,40 @@ int main(){
     check(std::abs(rate.rate(30000000)-30)<.01,"30 real completions are not multiplied by FG");
     rate.reset(0);for(int i=1;i<=1000;++i)rate.complete(i*10000);
     check(rate.rate(10000000)==1000,"completion rate has no 60 or 120fps cap");
+    {
+        using veyra::engine::ProviderSubmissionCounter;
+        ProviderSubmissionCounter counter;
+        auto d=counter.observe(7,52,39);
+        check(d.presented==52&&d.generated==39&&!d.restarted,"first provider report counts its real completions");
+        d=counter.observe(8,1,0);
+        check(d.presented==1&&d.generated==0&&d.restarted,"resize with unchanged settings never subtracts old XeSS totals");
+        d=counter.observe(8,4,3);
+        check(d.presented==3&&d.generated==3&&!d.restarted,"new provider session advances from its own baseline");
+        d=counter.observe(8,0,0);
+        check(d.presented==0&&d.generated==0&&d.restarted,"provider-local resize rollback is safe without a presenter generation change");
+        counter.reset(8,100,75);d=counter.observe(8,104,75);
+        check(d.presented==4&&d.generated==0,"settings revision baseline excludes previously reported provider totals");
+        d=counter.observe(8,104,78);
+        check(d.presented==0&&d.generated==3,"asynchronous generated-only report is consumed independently");
+        d=counter.observe(9,200,150);
+        check(d.presented==200&&d.generated==150&&d.restarted,"session generation catches a restart even when new totals exceed old totals");
+        d=counter.observe(10,0,0);d=counter.observe(10,4,3);
+        check(d.presented==4&&d.generated==3,"backend off and on starts a fresh bounded delta");
+        veyra::engine::CountedFrameRateWindow counted;counted.reset(0);
+        for(int i=1;i<=60;++i)counted.complete(i*166666,4);
+        check(std::abs(counted.rate(10000000)-240)<.01,"weighted provider rate preserves actual 4X reports");
+        check(counted.rate(15000000)==120&&counted.rate(20000000)==0,"weighted reports expire without fabricating output");
+        constexpr uint64_t fieldRemaining=0xffffffff7f04d88bULL; // saved R15 in the 21:05:46 dump
+        counted.reset(0);counted.complete(10000000,fieldRemaining);
+        check(std::isfinite(counted.rate(10000000))&&counted.rate(20000000)==0,"near-UINT64_MAX SDK report does bounded work and expires");
+        veyra::engine::FrameCompletionRates rates(0);
+        const auto begin=std::chrono::steady_clock::now();
+        rates.xess(fieldRemaining,10000000);
+        veyra::diagnostics::FrameFlowMetrics metrics;rates.snapshot(metrics,10000000);
+        check(std::chrono::steady_clock::now()-begin<std::chrono::milliseconds(500)&&std::isfinite(metrics.xessSdkSubmitFps),"actual FrameCompletionRates consumes the field underflow value without a CPU loop");
+        rates.snapshot(metrics,20000000);
+        check(metrics.xessSdkSubmitFps==0,"provider report cannot pin measured FPS after the source stops");
+    }
     using veyra::source::captureDuration;using veyra::engine::liveSourceInterval100ns;
     using veyra::source::captureDiscontinuity;
     {
@@ -286,6 +397,12 @@ int main(){
         check(std::abs(liveSmoothedCapacityWaitMs(16.68,.48)-2.5)<.01,"sd 0.6 ms (mean distance 0.48 ms) waits 2.5 ms");
         check(liveSmoothedCapacityWaitMs(16.68,1.5)==3&&liveSmoothedCapacityWaitMs(33.4,20)==3,"and nothing waits more than 3 ms");
         check(liveSmoothedCapacityWaitMs(4.17,5)==2&&liveSmoothedCapacityWaitMs(8.33,5)==liveSmoothedCapacityWaitMs(8.33)&&liveSmoothedCapacityWaitMs(12.4,5)==liveSmoothedCapacityWaitMs(12.4),"above 80 fps the wait ignores the jitter");
+        using veyra::engine::liveHalfRateCapacityWaitMs;
+        check(std::abs(liveHalfRateCapacityWaitMs(2,16.68,8.33,16.68)-7.85)<.01,"59.94 on 120 Hz can wait with a refresh left for the real frame");
+        check(liveHalfRateCapacityWaitMs(2,16.68,8.33,8.7)==2,"a late pair gets only the regular wait");
+        check(liveHalfRateCapacityWaitMs(2,16.68,16.67,16.68)==2,"60 Hz keeps the existing wait");
+        check(liveHalfRateCapacityWaitMs(2,16.68,0,16.68)==2,"unknown refresh keeps the existing wait");
+        check(liveHalfRateCapacityWaitMs(2,16.68,3.125,16.68)==3.125,"fast refresh waits at most one refresh");
         const auto measuredJitter=[&](double sdMs){
             LiveArrivalSmoother smoother;uint32_t seed=7;
             for(unsigned n=0;n<2000;++n)smoother.anchor(int64_t(n*333643.0*(1-800e-6)),int64_t(n*333643.0+40000+gaussian(seed,sdMs*10000)),interval);
@@ -463,7 +580,49 @@ int main(){
             }
             return r;
         };
+        {
+            // Content runs at a genuinely varying rate, with repeated transport
+            // samples between changes. Failed fixed-period fitting must not
+            // erase the measured content rate or suppress any new picture.
+            constexpr std::array<int,11> runs{1,4,1,3,1,2,5,2,1,3,4};
+            constexpr int64_t dt=166667;
+            ContentDedup variable;uint64_t id=1;int left=runs[0],step=0,unknown=0,lost=0;
+            int64_t last=-1;bool ordered=true;
+            for(int i=0;i<1800;++i){
+                const bool changed=i==0||left==0;
+                if(left==0){++id;left=runs[++step%runs.size()];}
+                const auto d=variable.observe(&id,i*dt,dt,i==0);
+                lost+=changed&&!d.keep;
+                if(d.keep){ordered&=d.contentPts>last&&d.contentPts<=i*dt;last=d.contentPts;}
+                if(i>120&&variable.contentFps()==0)++unknown;
+                --left;
+            }
+            check(lost==0&&ordered,"variable content retains each changed picture with monotonic bounded timestamps");
+            check(unknown==0&&variable.contentFps()>20&&variable.contentFps()<30,
+                  "variable content reports its observed rate even when no fixed cadence fits");
+        }
         const int n=1200;
+        for(double captureFps:{58.0,60000.0/1001.0,60.0}){
+            for(double fps:{24.0,25.0,30000.0/1001.0,30.0,40.0,45.0,50.0,60.0}){
+                const auto effective=std::min(fps,captureFps);
+                const auto r=run(captureFps,[&](int i){return int64_t(std::floor(i*effective/captureFps+1e-9));},n,1,0,int64_t(std::llround(1e7/effective)));
+                check(r.droppedReal==0&&r.keptRepeats==0&&r.monotonic&&r.neverLate,
+                      "content-rate matrix keeps every unique picture once with bounded monotonic PTS");
+                const auto expected=int64_t(std::floor((n-1)*effective/captureFps+1e-9))+1;
+                check(r.kept==expected,"content-rate matrix matches independent 24/25/29.97/30/40/45/50/60 picture truth");
+            }
+        }
+        {
+            ContentDedup missed;constexpr int64_t dt=166667;
+            for(uint64_t i=1;i<=600;i+=2){const auto id=(1ull<<56)+i;missed.observe(&id,int64_t(i)*dt,dt,i==1,0,i);}
+            check(std::abs(missed.contentFps()-60)<.1,
+                  "capture picture serials distinguish engine mailbox losses from lower source content rate");
+        }
+        {
+            ContentDedup forty;double maxError=0;
+            for(int i=0;i<1200;++i){const uint64_t id=uint64_t(i*2/3);forty.observe(&id,i*166667,166667,i==0);if(i>120)maxError=std::max(maxError,std::abs(forty.contentFps()-40));}
+            check(maxError<.1,"stable 40-in-60 reporting is not quantized into 40/41 FPS flicker");
+        }
         {const auto r=run(60.0,[](int i){return int64_t(i/2);},n,0,0,333333);
          check(r.kept==n/2&&r.keptRepeats==0&&r.droppedReal==0,"dedup 30-in-60: every real picture kept once, every repeat dropped");
          check(r.monotonic&&r.neverLate&&r.regularSpans==r.spans,"dedup 30-in-60: content spans exactly 33.3 ms, never later than the sample");}
@@ -541,6 +700,18 @@ int main(){
          ContentDedup dedup;int kept=0;
          for(int i=0;i<600;++i){const uint64_t shown=i<240?uint64_t(i/2):1000u;const bool keep=dedup.observe(&shown,i*166667+1000,166667,i==0).keep;if(i>=300)kept+=keep;}
          check(kept>=148&&kept<=152&&dedup.stats().held>=140,"dedup still picture after 30 fps content is held at a steady 30 fps");}
+        {
+            ContentDedup recovering;constexpr int64_t dt=166667;const uint64_t picture=7;
+            int64_t firstHeldSpan=0,firstHeldCadence=0;
+            for(int i=0;i<30;++i){
+                const auto d=recovering.observe(&picture,i*dt,dt,i==0);
+                if(d.keep&&d.holdInterval&&!firstHeldSpan){firstHeldSpan=d.interval;firstHeldCadence=d.holdInterval;}
+            }
+            check(firstHeldSpan>firstHeldCadence&&firstHeldCadence==2*dt,
+                  "static refresh distinguishes its preceding hold gap from the ongoing content cadence");
+            const auto phase=veyra::engine::capturePairInterval100ns({firstHeldCadence,10000000},60,0,double(firstHeldSpan)/10000,true);
+            check(phase==2*dt,"post-boundary static hold cannot stretch subsequent pair scheduling to the hitch duration");
+        }
         {// Still picture after 40 fps content in 60 Hz: held on the 25 ms grid (33/17 ms samples).
          ContentDedup dedup;int kept=0;
          for(int i=0;i<600;++i){const uint64_t shown=i<240?uint64_t(std::floor(i*40.0/60.0+1e-9)):1000u;const bool keep=dedup.observe(&shown,i*166667+1000,166667,i==0).keep;if(i>=300)kept+=keep;}
@@ -579,6 +750,56 @@ int main(){
         for(int i=0;i<700;++i){old.complete(t);t+=166667;}
         const auto recent=old.lowFps(t);
         check(recent&&std::abs(*recent-60.0)<0.1,"intervals older than ten seconds leave the 1% low");
+        // Presents begun exactly on a 120 fps grid whose calls take 0.15-0.55 ms:
+        // spaced by return, the call's own jitter sets the 1% low; by start, it does not.
+        veyra::engine::FrameCompletionRates byStart(0),byReturn(0);t=1000000;
+        veyra::diagnostics::FrameFlowMetrics startMetrics,returnMetrics;
+        for(int i=0;i<1200;++i){const int64_t call=1500+(i*7919)%4000;byStart.presented(i%2==0,t+call,t);byReturn.presented(i%2==0,t+call);t+=83333;}
+        byStart.snapshot(startMetrics,t);byReturn.snapshot(returnMetrics,t);
+        check(startMetrics.presentLow1Fps&&*startMetrics.presentLow1Fps>119.9&&returnMetrics.presentLow1Fps&&*returnMetrics.presentLow1Fps<116,
+              "1% low spaces presents by the call start, as RTSS and PresentMon, not by the call's return");
+        check(std::abs(startMetrics.presentSubmitFps-returnMetrics.presentSubmitFps)<0.2,"the submit rate counts the same presents either way");
+    }
+    {// PictureCompare.h: a new picture stops the comparison early; its reference copy can wait.
+        using veyra::pipeline::PictureReference;using veyra::pipeline::PicturePlane;using veyra::pipeline::PictureComponents;
+        std::vector<uint8_t> a(3840*64),b(3840*64);
+        for(size_t i=0;i<a.size();++i){a[i]=uint8_t(40+(i*7919)%160);b[i]=uint8_t(a[i]+20);}
+        PicturePlane pa{a.data(),3840,3840,64},pb{b.data(),3840,3840,64};
+        PictureReference ref;const auto first=ref.observe(&pa,1,PictureComponents::Bytes,PictureReference::kBand8,true);
+        check(first.commit&&!first.repeat,"a deferred new picture asks for its reference copy");
+        ref.commit(&pa,1);
+        const auto again=ref.observe(&pa,1,PictureComponents::Bytes,PictureReference::kBand8,true);
+        check(again.repeat&&again.id==first.id&&!again.commit,"after commit the same picture repeats");
+        const auto moved=ref.observe(&pb,1,PictureComponents::Bytes,PictureReference::kBand8,true);
+        check(!moved.repeat&&moved.commit&&moved.over>=PictureReference::kDecidedOver&&moved.over<=2*3840&&moved.id!=first.id,
+              "a frame changed everywhere is decided after kDecidedOver components, not after the whole picture");
+        const auto uncommitted=ref.observe(&pb,1,PictureComponents::Bytes,PictureReference::kBand8,true);
+        check(!uncommitted.repeat&&uncommitted.id!=moved.id,"a skipped commit makes the next sample new, never a false repeat");
+        ref.commit(&pb,1);
+        check(ref.observe(&pb,1,PictureComponents::Bytes).repeat,"the committed picture is the reference again");
+        auto sparse=b;for(int k=0;k<200;++k)sparse[size_t(k)*997%sparse.size()]=uint8_t(sparse[size_t(k)*997%sparse.size()]+9);
+        PicturePlane ps{sparse.data(),3840,3840,64};
+        const auto few=ref.observe(&ps,1,PictureComponents::Bytes);
+        check(!few.repeat&&few.over==200,"a small real change below kDecidedOver keeps its exact count");
+        // Timing only (no assertion): what a 4K NV12 capture callback spends before it
+        // can publish the frame, for a repeat and for a moving new picture.
+        std::vector<uint8_t> y0(3840*2160),uv0(3840*1080),y1(y0.size()),uv1(uv0.size());
+        for(size_t i=0;i<y0.size();++i){y0[i]=uint8_t(40+(i*7919)%160);y1[i]=uint8_t(y0[i]+9);}
+        for(size_t i=0;i<uv0.size();++i){uv0[i]=uint8_t(90+(i*104729)%60);uv1[i]=uint8_t(uv0[i]+5);}
+        PicturePlane f0[2]{{y0.data(),3840,3840,2160},{uv0.data(),3840,3840,1080}},f1[2]{{y1.data(),3840,3840,2160},{uv1.data(),3840,3840,1080}};
+        const auto ms=[](auto a,auto b){return std::chrono::duration<double,std::milli>(b-a).count();};
+        double repeatMs=1e9,deferredMs=1e9,commitMs=1e9,immediateMs=1e9;
+        for(int k=0;k<12;++k){
+            PictureReference timed;timed.observe(f0,2,PictureComponents::Bytes);
+            auto t0=std::chrono::steady_clock::now();timed.observe(f0,2,PictureComponents::Bytes);auto t1=std::chrono::steady_clock::now();
+            repeatMs=std::min(repeatMs,ms(t0,t1));
+            t0=std::chrono::steady_clock::now();timed.observe(f1,2,PictureComponents::Bytes,PictureReference::kBand8,true);t1=std::chrono::steady_clock::now();
+            timed.commit(f1,2);const auto t2=std::chrono::steady_clock::now();
+            deferredMs=std::min(deferredMs,ms(t0,t1));commitMs=std::min(commitMs,ms(t1,t2));
+            t0=std::chrono::steady_clock::now();timed.observe(f0,2,PictureComponents::Bytes);t1=std::chrono::steady_clock::now();
+            immediateMs=std::min(immediateMs,ms(t0,t1));
+        }
+        std::printf("PICTURE_TIMING 4K NV12 repeatMs=%.3f newBeforePublishMs=%.3f deferredCopyMs=%.3f newImmediateMs=%.3f (best of 12)\n",repeatMs,deferredMs,commitMs,immediateMs);
     }
     return failed?1:0;
 }

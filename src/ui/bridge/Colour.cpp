@@ -1,4 +1,5 @@
 // QML bridge: Colour responsibilities.
+#include "veyra/engine/EnhancementSettings.h"
 #include "../QmlPlayerBridge_p.h"
 
 namespace veyra::ui {
@@ -30,6 +31,8 @@ void QmlPlayerBridge::resetCurrentPage() {
     s.model = engine::NrSettings{};
     s.residual = engine::ResidualSettings{};
     s.protection = engine::ProtectionSettings{};
+    s.exclusion = engine::ProtectionSettings{};
+    s.nrHoldStrength=0;
     s.color = engine::ColorSettings{};
     s.additionalColors = {}; s.additionalColorCount = 0;
     s.antiAlias = engine::AntiAliasSettings{}; s.additionalAntiAlias = {}; s.additionalAntiAliasCount = 0;
@@ -41,7 +44,6 @@ void QmlPlayerBridge::resetCurrentPage() {
     impl_->chain=engine::toChain(s); impl_->selectedNr=-1; impl_->selectedColour=-1;
     impl_->chain.mode = before.mode;
     if (before.mode == engine::ChainMode::Node) {
-        engine::removeLegacyNodeProtection(impl_->chain);
         const auto initialized = impl_->layout.initialize(impl_->chain);
         if (!initialized.accepted) {
             impl_->chain = before; impl_->layout = oldLayout;
@@ -345,7 +347,7 @@ bool QmlPlayerBridge::resetColourGroup(int group){
 // (runtime_local/luts); looks are user data beside the presets.
 QVariantList QmlPlayerBridge::lutLibrary() const {
     QVariantList out;
-    const engine::ColorLutStore store(runtime::localDataDirectory());
+    const engine::ColorLutStore store(runtime::userDataDirectory());
     for (const auto& name : store.list()) out << QString::fromStdWString(name);
     return out;
 }
@@ -367,11 +369,11 @@ void QmlPlayerBridge::importLutDialog() {
 }
 bool QmlPlayerBridge::importLut(const QString& path) {
     if (impl_->colourIndex() < 0) { emit notice(tr("处理链中没有调色节点，无法使用 LUT"), true); return false; }
-    const engine::ColorLutStore store(runtime::localDataDirectory());
+    const engine::ColorLutStore store(runtime::userDataDirectory());
     std::wstring name; std::string error;
     if (!store.importFile(std::filesystem::path(path.toStdWString()), name, error) || name.empty()) {
         veyra::log::warn("ui-colour", std::format("lut import rejected path={} error={}", path.toStdString(), error));
-        emit notice(tr("LUT 导入失败：%1").arg(QString::fromStdString(error)), true);
+        emit notice(tr("LUT 导入失败：%1").arg(uiText(std::string_view(error))), true);
         return false;
     }
     veyra::log::info("ui-colour", std::format("lut imported name={}", QString::fromStdWString(name).toStdString()));
@@ -383,7 +385,7 @@ bool QmlPlayerBridge::importLut(const QString& path) {
 bool QmlPlayerBridge::setColourLut(const QString& name) {
     auto c = selectedColourSettings();
     if (name.isEmpty()) { c.clearLut(); return commitColour(c); }
-    const engine::ColorLutStore store(runtime::localDataDirectory());
+    const engine::ColorLutStore store(runtime::userDataDirectory());
     engine::ColorLutData data;
     if (!store.validName(name.toStdWString()) || !store.resolve(name.toStdWString(), data) || !data.valid()) {
         emit notice(tr("LUT 不可用：%1").arg(name), true);
@@ -419,7 +421,7 @@ bool QmlPlayerBridge::applyColourLook(int index) {
     }
     auto colour = store.entries()[size_t(index)].color; colour.enabled = true;
     if (colour.hasLut()) {
-        const engine::ColorLutStore luts(runtime::localDataDirectory());
+        const engine::ColorLutStore luts(runtime::userDataDirectory());
         engine::ColorLutData data;
         if (!luts.resolve(colour.lutNameString(), data)) {
             emit notice(tr("预设引用的 LUT 不存在：%1，未应用").arg(QString::fromStdWString(colour.lutNameString())), true);
@@ -467,5 +469,45 @@ bool QmlPlayerBridge::exportColourLook(int index, const QString& path) {
     return true;
 }
 
+
+bool QmlPlayerBridge::doviFollow()const{return settings().doviFollow;}
+
+void QmlPlayerBridge::setDoviFollow(bool on){
+    auto s=settings();if(s.doviFollow==on)return;s.doviFollow=on;
+    // The shell preference is the global fallback: it re-applies at the next start
+    // even for a source that has no stored per-film profile yet.
+    auto& i=*impl_;
+    i.prefs[QStringLiteral("doviFollow")]=on;
+    if(!i.savePrefs())veyra::log::warn("ui-prefs","dolby vision follow flag not saved");
+    commitHdrTuning(std::move(s));
+}
+
+bool QmlPlayerBridge::doviP7Compose()const{return settings().doviP7Compose;}
+
+void QmlPlayerBridge::setDoviP7Compose(bool on){
+    auto s=settings();if(s.doviP7Compose==on)return;s.doviP7Compose=on;
+    // Lives with the shell preference like the Level 1 follow flag, so it survives
+    // a restart and applies before the next file is opened.
+    auto& i=*impl_;
+    i.prefs[QStringLiteral("doviP7Compose")]=on;
+    if(!i.savePrefs())veyra::log::warn("ui-prefs","dolby vision p7 compose flag not saved");
+    commitHdrTuning(std::move(s));
+    // Custom: the enhancement layer is enabled when the source opens (the
+    // descriptor is fixed then), so toggling during playback cannot change the
+    // picture. Say that explicitly instead of leaving the viewer to wonder why
+    // the switch did nothing.
+    if (i.snapshot.running) {
+        emit notice(on ? tr("增强层已开启：重新打开当前文件后生效")
+                       : tr("增强层已关闭：重新打开当前文件后生效"), false);
+    }
+}
+
+bool QmlPlayerBridge::doviFollowAverage()const{return settings().doviFollowAverage;}
+
+void QmlPlayerBridge::setDoviFollowAverage(bool on){
+    auto s=settings();if(s.doviFollowAverage==on)return;s.doviFollowAverage=on;
+    commitHdrTuning(std::move(s));}
+// Danmaku rides the same per-frame tick as the subtitle overlay: it reads the
+// engine's own position, so pause, seek and speed changes need no extra wiring.
 
 } // namespace veyra::ui

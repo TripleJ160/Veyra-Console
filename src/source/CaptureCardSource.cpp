@@ -1,4 +1,5 @@
 #include "veyra/source/CaptureCardSource.h"
+#include "veyra/sink/AudioGain.h"
 #include "veyra/source/DeckLinkCapture.h"
 #include "veyra/source/CaptureFrameRate.h"
 #include "veyra/source/WasapiAudioInput.h"
@@ -295,23 +296,38 @@ bool parseCapturePath(std::wstring_view path,CaptureSelection& selection){
 // picture (PictureCompare.h) and tags the frame with its picture number. About
 // 0.3 ms for 1440p NV12 plus a copy of each new picture, so only while a
 // content mode asks for it.
-static void compareCaptureSample(const CaptureMediaLayout& layout,const uint8_t* data,AVFrame& frame,pipeline::PictureReference& reference){
-    auto* info=pipeline::captureUploadFrame(&frame);if(!info)return;
-    pipeline::PicturePlane planes[3]{{data,layout.stride,layout.rowBytes,layout.height}};unsigned count=1;
+static unsigned capturePicturePlanes(const CaptureMediaLayout& layout,const uint8_t* data,pipeline::PicturePlane (&planes)[3]){
+    planes[0]={data,layout.stride,layout.rowBytes,layout.height};unsigned count=1;
     for(unsigned p=1;p<layout.planes&&p<3;++p)planes[count++]={data+(p==1?layout.chromaOffset:layout.secondChromaOffset),layout.chromaStride,layout.chromaRowBytes,layout.height/2};
+    return count;
+}
+// Returns true when the sample is a new picture whose copy into the reference
+// is still owed: commitCaptureSample() after the frame was published, while the
+// driver sample is still valid. Publishing first keeps that 12 MB copy (4K NV12)
+// off every new frame's capture-to-engine path.
+static bool compareCaptureSample(const CaptureMediaLayout& layout,const uint8_t* data,AVFrame& frame,pipeline::PictureReference& reference){
+    auto* info=pipeline::captureUploadFrame(&frame);if(!info)return false;
+    pipeline::PicturePlane planes[3];const unsigned count=capturePicturePlanes(layout,data,planes);
     // P010/P016 are 16-bit words; packed 10-bit and 5/6-bit RGB fields compare exactly; the rest are 8-bit components.
     const bool p016=layout.packing==CapturePacking::P016,words=p016||layout.packing==CapturePacking::P010;
     const bool exact=layout.packing==CapturePacking::V210||layout.packing==CapturePacking::Rgb10xLE||layout.packing==CapturePacking::Rgb555||
         layout.packing==CapturePacking::Rgb565||layout.packing==CapturePacking::Unknown;
     const auto r=reference.observe(planes,count,exact?pipeline::PictureComponents::Exact:words?pipeline::PictureComponents::Words:pipeline::PictureComponents::Bytes,
-        words?pipeline::PictureReference::bandFor(p016?16:10,p016?0:6):pipeline::PictureReference::kBand8);
+        words?pipeline::PictureReference::bandFor(p016?16:10,p016?0:6):pipeline::PictureReference::kBand8,true);
     info->pictureId=r.id;info->pictureRepeat=r.repeat;info->pictureOver=r.over;info->pictureMax8=r.max8;info->pictureValid=true;
+    return r.commit;
+}
+static void commitCaptureSample(const CaptureMediaLayout& layout,const uint8_t* data,pipeline::PictureReference& reference){
+    pipeline::PicturePlane planes[3];const unsigned count=capturePicturePlanes(layout,data,planes);
+    reference.commit(planes,count);
 }
 // One native sample into a mailbox frame. Upload-backed frames
 // (CaptureUploadFrame.h) are written once, straight into GPU upload memory, or
 // into their CPU planes while the GPU still reads the buffer; planar I420/YV12
 // is interleaved into the frame's NV12 layout here instead of in the graph.
-static bool writeCaptureFrame(const CaptureMediaLayout& layout,const uint8_t* data,size_t bytes,AVFrame& frame,bool flipRows,pipeline::PictureReference* pictures){
+// commit: the caller copies a new picture into `pictures` after publishing the
+// frame (commitCaptureSample); without it the copy happens here.
+static bool writeCaptureFrame(const CaptureMediaLayout& layout,const uint8_t* data,size_t bytes,AVFrame& frame,bool flipRows,pipeline::PictureReference* pictures,bool* commit=nullptr){
     pipeline::selectCaptureUploadTarget(frame);
     const bool flip=layout.bottomUp!=flipRows;
     if(layout.planes==3&&frame.format==AV_PIX_FMT_NV12&&pipeline::captureUploadFrame(&frame)){
@@ -320,7 +336,9 @@ static bool writeCaptureFrame(const CaptureMediaLayout& layout,const uint8_t* da
     }else if(!copyCaptureSample(layout,data,bytes,frame,flipRows))return false;
     if(layout.packing==CapturePacking::V210)pipeline::sampleCaptureV210Proxy(frame,data,layout.stride,flip);
     else pipeline::sampleCaptureUploadProxy(frame,data,layout.stride,flip);
-    if(pictures)compareCaptureSample(layout,data,frame,*pictures);
+    if(pictures&&compareCaptureSample(layout,data,frame,*pictures)){
+        if(commit)*commit=true;else commitCaptureSample(layout,data,*pictures);
+    }
     return true;
 }
 struct CaptureCardSource::Impl:ISampleGrabberCB {
@@ -435,18 +453,12 @@ struct CaptureCardSource::Impl:ISampleGrabberCB {
     AudioInputRecovery audioRecovery;
     SourceInfo info;CaptureMediaLayout layout;Clock::time_point lastFrame;
     bool signalProbeEnabled=false;Clock::time_point nextSignalProbe{};CaptureSignalProbeState signalProbe;
-    // Magewell Pro Capture low-latency video (MagewellCapture.h). While it runs, the DirectShow
-    // video samples are ignored and its frames enter the same native mailbox below; if it stops
-    // on its own, DirectShow delivery resumes by itself.
+    // SDK video and DirectShow use the same native mailbox. With separate audio the
+    // negotiated DirectShow graph stays stopped until SDK capture needs a fallback.
     std::unique_ptr<magewell::LowLatencyVideo> magewell;
     magewell::VideoRequest magewellRequest;bool magewellWanted=false;
-    std::atomic<bool> magewellDelivering{false};   // set after start, cleared before stop
-    std::atomic<uint64_t> externalFrames{0};
-    // DirectShow keeps capturing while the SDK runs unless the graph is stopped. Two 4K60
-    // P010 DMA streams (~1.5 GB/s each) exceed a Pro Capture card's PCIe link: both fell to
-    // ~28 fps and the SDK frames took 42-49 ms to land (field log 2026-10-01). The graph
-    // is stopped once the SDK has delivered, when no DirectShow audio shares it.
-    bool magewellCanPauseGraph=false,directShowPaused=false;
+    std::atomic<bool> magewellDelivering{false};
+    bool magewellDeferredGraph=false;
     // How old a frame already is, by the driver's own timestamp, when DirectShow hands it to
     // us: graph clock now - (run reference + sample start). Anything the driver queued
     // shows up here and nowhere else (some GC573 users report high latency, others not).
@@ -470,17 +482,18 @@ struct CaptureCardSource::Impl:ISampleGrabberCB {
     int64_t pendingNativePts100ns=0;
     void deliverExternal(const uint8_t* data,size_t bytes,double deviceSeconds,bool discontinuity,int64_t duration100ns=0,int64_t nativePts100ns=0){
         const auto arrival=Clock::now();
-        externalFrames.fetch_add(1,std::memory_order_relaxed);
-        AVFrame* staged=nullptr;bool written=false;
+        AVFrame* staged=nullptr;bool written=false,commitPicture=false;
+        // A new picture's reference copy runs when this call returns, after the publish below.
+        struct CommitAfterPublish{Impl& p;const uint8_t* data;bool& owed;~CommitAfterPublish(){if(owed)commitCaptureSample(p.layout,data,p.pictureReference);}} commitLater{*this,data,commitPicture};
         {std::lock_guard lock(mutex);if(stagingFrame&&!stagingBusy){stagingBusy=true;staged=stagingFrame;}}
-        if(staged)written=writeCaptureFrame(layout,data,bytes,*staged,verticalFlip.load(),pictureCompare.load(std::memory_order_relaxed)?&pictureReference:nullptr);
+        if(staged)written=writeCaptureFrame(layout,data,bytes,*staged,verticalFlip.load(),pictureCompare.load(std::memory_order_relaxed)?&pictureReference:nullptr,&commitPicture);
         {
             std::lock_guard lock(mutex);
             if(staged)stagingBusy=false;
             if(!staged||!written||!pendingFrame){++dropped;return;}
             // Continue the stream's timeline from the last DirectShow sample instead of jumping
             // to the card's clock, so the audio mapping and cadence checks see one timeline.
-            if(!externalTimeAnchored){
+            if(!externalTimeAnchored||(discontinuity&&received&&deviceSeconds+externalTimeOffset<=pendingTime)){
                 externalTimeOffset=(received?pendingTime+(nominalDuration100ns>0?double(nominalDuration100ns)/1e7:1.0/60):0.0)-deviceSeconds;
                 externalTimeAnchored=true;
             }
@@ -652,7 +665,7 @@ struct CaptureCardSource::Impl:ISampleGrabberCB {
         }
     }
     HRESULT STDMETHODCALLTYPE SampleCB(double time,IMediaSample* sample)override{
-        if(!compressedPath&&magewellDelivering.load()&&magewell->running())return S_OK;   // the SDK delivers video
+        if(magewellDelivering.load())return S_OK;
         // Register the DirectShow delivery thread with MMCSS once; the handle
         // lives for the thread (revert happens when the thread exits).
         static thread_local HANDLE mmcss=[]{DWORD index=0;HANDLE h=AvSetMmThreadCharacteristicsW(L"Pro Audio",&index);if(!h)log::warn("capture","MMCSS unavailable for the capture callback thread");return h;}();(void)mmcss;
@@ -664,12 +677,14 @@ struct CaptureCardSource::Impl:ISampleGrabberCB {
             (compressedPath?sample->GetActualDataLength()>0:sample->GetActualDataLength()>=LONG(layout.sampleBytes));
         bool enqueued=false;uint64_t timingSequence=0;int64_t copied100ns=0;double lockWaitMs=0,arrivalDeltaMs=0,ptsDeltaMs=0;
         // Native path: claim the staging frame, copy outside the lock.
-        AVFrame* staged=nullptr;bool stagedOk=false,probeNow=false;CaptureSignalSample signalSample;
+        AVFrame* staged=nullptr;bool stagedOk=false,probeNow=false,commitPicture=false;CaptureSignalSample signalSample;
+        // A new picture's reference copy runs when this call returns (every path), after the publish below.
+        struct CommitAfterPublish{Impl& p;const uint8_t* data;bool& owed;~CommitAfterPublish(){if(owed)commitCaptureSample(p.layout,data,p.pictureReference);}} commitLater{*this,data,commitPicture};
         if(valid&&!compressedPath){
             {std::lock_guard lock(mutex);if(stagingFrame&&!stagingBusy){stagingBusy=true;staged=stagingFrame;}
                 if(signalProbeEnabled&&arrival>=nextSignalProbe){nextSignalProbe=arrival+std::chrono::seconds(1);probeNow=true;}}
             if(probeNow)signalSample=sampleCaptureSignal(layout,data,size_t(sample->GetActualDataLength()));
-            if(staged)stagedOk=writeCaptureFrame(layout,data,size_t(sample->GetActualDataLength()),*staged,verticalFlip.load(),pictureCompare.load(std::memory_order_relaxed)?&pictureReference:nullptr);
+            if(staged)stagedOk=writeCaptureFrame(layout,data,size_t(sample->GetActualDataLength()),*staged,verticalFlip.load(),pictureCompare.load(std::memory_order_relaxed)?&pictureReference:nullptr,&commitPicture);
         }
         {
             std::lock_guard lock(mutex);
@@ -950,9 +965,18 @@ void CaptureCardSource::setCpuUnpack(bool enabled){
     log::warn("capture-unpack",std::format("legacy CPU per-pixel unpack={} (diagnostic; takes effect on the next connect)",enabled?1:0));
 }
 bool CaptureCardSource::setAudioGain(float gain){
+    gain=sink::clampAudioGain(gain);
     if(p_->wasapi){p_->wasapi->setGain(gain);return p_->wasapi->snapshot().available;}
     auto& p=*p_;if(p.audioSession){p.audioSession->setGain(gain);return p.audioSession->snapshot().available;}if(!p.graph||!p.audioFilter)return false;
     if(gain==p.lastAudioGain)return p.audioGainSupported;
+    // All adjustable PCM paths above use the application renderer. The legacy
+    // DirectShow attenuation API cannot amplify (nor may encoded passthrough
+    // bytes be multiplied). Do not falsely report a 300% gain as applied.
+    if(gain>1.0f){
+        p.lastAudioGain=gain;p.audioGainSupported=false;
+        log::warn("capture-audio","boost requires decoded PCM; legacy attenuation/receiver passthrough cannot amplify");
+        return false;
+    }
     ComPtr<IBasicAudio> audio;HRESULT hr=p.graph.As(&audio);
     if(SUCCEEDED(hr)){long attenuation=gain<=0?-10000:long(std::clamp(2000.0*std::log10(double(gain)),-10000.0,0.0));hr=audio->put_Volume(attenuation);}
     p.lastAudioGain=gain;p.audioGainSupported=SUCCEEDED(hr);log::info("capture-audio",std::format("application gain={} hr=0x{:X}",gain,unsigned(hr)));return p.audioGainSupported;
@@ -1396,7 +1420,7 @@ bool CaptureCardSource::configure(const SourceOpenDesc& desc){close();error_.cle
         if(mw){
             p.magewellRequest={};p.magewellRequest.directShowPath=devicePath;p.magewellRequest.format=*mw;
             p.magewellRequest.width=l.width;p.magewellRequest.height=l.height;p.magewellRequest.stride=l.stride;
-            p.magewellRequest.frameBytes=l.sampleBytes;p.magewellRequest.bottomUp=l.bottomUp;p.magewellRequest.partialLines=64;
+            p.magewellRequest.frameBytes=l.sampleBytes;p.magewellRequest.bottomUp=l.bottomUp;
             p.magewellWanted=true;
         }else{
             log::warn("magewell",std::format("low latency not available for this capture format (packing={} compressed={}); using DirectShow",int(l.packing),compressedPath));
@@ -1846,29 +1870,34 @@ bool CaptureCardSource::start(){
      if(SUCCEEDED(p.graph.As(&fg))&&SUCCEEDED(p.graph.As(&mf))){
          if(!p.referenceClock)fg->SetDefaultSyncSource();
          if(SUCCEEDED(mf->GetSyncSource(&p.ageClock))&&p.ageClock&&FAILED(p.ageClock->GetTime(&p.runReference)))p.runReference=0;}}
-    p.lastFrame=Impl::Clock::now();const auto hr=p.control->Run();p.info.opened=SUCCEEDED(hr);
-    if(p.vendorDelivering)p.vendorDelivering->store(p.info.opened);
-    if(p.info.opened&&p.wasapi&&!p.wasapi->start())p.audioError=L"WASAPI 音频启动失败；视频继续运行";
-    if(p.info.opened&&p.magewellWanted){
+    p.lastFrame=Impl::Clock::now();
+    p.magewellDeferredGraph=false;
+    if(p.magewellWanted){
         p.externalTimeAnchored=false;
         p.magewell=std::make_unique<magewell::LowLatencyVideo>();
         std::wstring why;
-        p.externalFrames=0;p.directShowPaused=false;
-        // Audio from a DirectShow device lives in the same graph and would stop with it.
-        p.magewellCanPauseGraph=!p.audioSink&&!p.audioFilter&&!p.audioPassthrough;
         if(!p.magewell->start(p.magewellRequest,[&p](const uint8_t* data,size_t bytes,double t,bool d){p.deliverExternal(data,bytes,t,d);},why)){
             log::warn("magewell",std::format("low latency not started; DirectShow video continues ({})",narrowForLog(why)));
             p.magewell.reset();
         }else{
             p.magewellDelivering=true;
-            if(!p.magewellCanPauseGraph)log::warn("magewell","audio comes from a DirectShow device in the capture graph, so DirectShow video keeps running beside the SDK; "
+            // Starting both paths at 4K can saturate the card's DMA before
+            // the SDK produces a single frame. Run the graph only for shared audio.
+            p.magewellDeferredGraph=!p.audioSink&&!p.audioFilter&&!p.audioPassthrough;
+            if(p.magewellDeferredGraph)log::info("magewell","DirectShow video deferred while the SDK owns capture");
+            else log::warn("magewell","audio comes from a DirectShow device in the capture graph, so DirectShow video keeps running beside the SDK; "
                 "choose the card's WASAPI audio endpoint for the full frame rate at 4K");
         }
     }
+    const auto hr=p.magewellDeferredGraph?S_OK:p.control->Run();
+    p.info.opened=SUCCEEDED(hr);
+    if(!p.info.opened&&p.magewell){p.magewell->stop();p.magewellDelivering=false;}
+    if(p.vendorDelivering)p.vendorDelivering->store(p.info.opened);
+    if(p.info.opened&&p.wasapi&&!p.wasapi->start())p.audioError=L"WASAPI 音频启动失败；视频继续运行";
     veyra::log::info("capture",std::format("Run hr=0x{:X} actual={}x{} nominalFps={:.3f} mailbox=1 ownedBuffers=2",unsigned(hr),p.info.width,p.info.height,p.info.averageFps));return p.info.opened;
 }
 void CaptureCardSource::recoverAudio(float gain,unsigned syncMode,int offsetMs){
-    auto& p=*p_;if(!p.info.opened||!p.control||p.wasapi)return;
+    auto& p=*p_;if(!p.info.opened||!p.control||p.wasapi||p.magewellDeferredGraph)return;
     bool vendorFailed=false;
     if(p.vendorAudio){
         const auto vendor=p.vendorAudio->state();
@@ -1960,18 +1989,23 @@ SourceReadStatus CaptureCardSource::read(pipeline::FramePacket& packet,const AVF
 SourceReadStatus CaptureCardSource::tryRead(pipeline::FramePacket& packet,const AVFrame** frame){return readWithWait(packet,frame,0);}
 SourceReadStatus CaptureCardSource::readWithWait(pipeline::FramePacket& packet,const AVFrame** frame,unsigned milliseconds){auto& p=*p_;*frame=nullptr;if(!p.info.opened)return SourceReadStatus::Error;
     if(p.decklink&&p.decklink->needsReopen()){error_=p.decklink->error();log::warn("decklink-reconnect",narrowForLog(error_));return SourceReadStatus::Error;}
-    // Magewell: stop DirectShow video once the SDK has proved itself (30 frames), and run
-    // it again if the SDK thread ends, so video never stops altogether.
-    if(p.magewellDelivering.load()&&p.control){
-        const bool sdk=p.magewell&&p.magewell->running();
-        if(sdk&&!p.directShowPaused&&p.magewellCanPauseGraph&&p.externalFrames.load(std::memory_order_relaxed)>=30){
-            const HRESULT hr=p.control->Stop();p.directShowPaused=SUCCEEDED(hr);
-            log::info("magewell",std::format("DirectShow video stopped while the SDK delivers (frees the card's DMA bandwidth) hr=0x{:08X}",uint32_t(hr)));
-        }else if(!sdk&&p.directShowPaused){
-            const HRESULT hr=p.control->Run();p.directShowPaused=false;
-            {std::lock_guard lock(p.mutex);p.forceDiscontinuity=true;}
-            log::warn("magewell",std::format("SDK capture ended; DirectShow video resumed hr=0x{:08X}",uint32_t(hr)));
+    // running() goes false only after the SDK releases its DMA buffers and channel.
+    // Do not change the audio route. Mark the first DirectShow frame as a clock boundary.
+    if(p.magewellDelivering.load()&&!p.magewell->running()){
+        {
+            std::lock_guard lock(p.mutex);
+            if(p.pending){p.pending=false;++p.dropped;}
+            p.recentArrivals.clear();
+            p.driverDiscontinuity.reset();
+            p.forceDiscontinuity=true;
         }
+        if(p.magewellDeferredGraph&&p.ageClock&&FAILED(p.ageClock->GetTime(&p.runReference)))p.runReference=0;
+        p.lastFrame=Impl::Clock::now();
+        p.magewellDelivering=false;
+        const auto hr=p.magewellDeferredGraph?p.control->Run():S_OK;
+        p.magewellDeferredGraph=false;
+        log::warn("magewell",std::format("SDK capture ended; DirectShow video resumed hr=0x{:08X}",uint32_t(hr)));
+        if(FAILED(hr))return SourceReadStatus::Error;
     }
     long code=0;LONG_PTR a=0,b=0;while(p.events&&p.events->GetEvent(&code,&a,&b,0)==S_OK){if(code==EC_DEVICE_LOST||code==EC_ERRORABORT)log::warn("capture-reconnect",std::format("DirectShow event={} detail=0x{:X}",code,uint64_t(a)));p.events->FreeEventParams(code,a,b);if(code==EC_DEVICE_LOST||code==EC_ERRORABORT)return SourceReadStatus::Error;}
     double time=0;int64_t nativeTime100ns=0;uint32_t flags=0;uint64_t sequence=0;pipeline::Rational duration;AVFrame* delivered=nullptr;AVFrame* expiredHardware=nullptr;bool feedDecode=false;
@@ -2027,8 +2061,10 @@ void CaptureCardSource::close()noexcept{
     auto& p=*p_;
     // Native stop detaches and joins callbacks before freeing mailbox/audio.
     if(p.decklink){p.decklink->stop();p.decklink.reset();}
-    p.magewellDelivering=false;
-    if(p.magewell){p.magewell->stop();p.magewell.reset();}if(p.control){const HRESULT hr=p.control->Stop();if(FAILED(hr))log::error("capture-close",std::format("Stop failed hr=0x{:08X}; releasing graph",uint32_t(hr)));}if(p.grab){const HRESULT hr=p.grab->SetCallback(nullptr,0);if(FAILED(hr))log::error("capture-close",std::format("detach callback hr=0x{:08X}",uint32_t(hr)));}
+    if(p.magewell){p.magewell->stop();p.magewell.reset();}
+    if(p.control){const HRESULT hr=p.control->Stop();if(FAILED(hr))log::error("capture-close",std::format("Stop failed hr=0x{:08X}; releasing graph",uint32_t(hr)));}
+    if(p.grab){const HRESULT hr=p.grab->SetCallback(nullptr,0);if(FAILED(hr))log::error("capture-close",std::format("detach callback hr=0x{:08X}",uint32_t(hr)));}
+    p.magewellDelivering=false;p.magewellDeferredGraph=false;
     if(p.wasapi)p.wasapi->stop();p.wasapi.reset();
     p.elgatoHdr.reset();
     if(p.vendorDelivering)p.vendorDelivering->store(false);

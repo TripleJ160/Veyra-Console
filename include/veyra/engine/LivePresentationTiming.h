@@ -49,6 +49,9 @@ inline double livePairHoldMs(bool hasGenerated,double realPtsMs,double generated
 // application reports starts at the callback and would read 0.6 ms higher at P95
 // only because its start point jitters; kLead100ns keeps it where it was, for
 // 0.5% more late generated frames (reports/claude-fg-sidefx-20261101/sim_final).
+// On capture cards the lead cancels the 0.5 ms readiness margin of LivePairLatency
+// (it learns readiness against the callback); LiveDeadlineMargin adds back what the
+// generated frames actually need there.
 // One callback beyond min(interval/3, 8 ms) does not move the line; a second on
 // the same side moves it there at once. The FG budget, generated-frame expiry
 // stays tied to the callback. Deduplicated capture also learns GPU readiness on the content clock.
@@ -121,5 +124,13 @@ inline constexpr double kLiveJitterWaitMinIntervalMs=12.5,kLiveJitterWaitMaxMs=3
 inline double liveSmoothedCapacityWaitMs(double outputIntervalMs,double callbackJitterMs=0){
     const double base=std::clamp(2-(outputIntervalMs-5)/12,1.0,2.0);
     return outputIntervalMs<kLiveJitterWaitMinIntervalMs?base:std::clamp(1+3.125*callbackJitterMs,base,kLiveJitterWaitMaxMs);
+}
+// On a faster fixed-refresh display a half-rate 2X pair can wait briefly for
+// a flip slot while retaining one whole refresh for its following real frame.
+inline double liveHalfRateCapacityWaitMs(double baseMs,double outputIntervalMs,double refreshMs,double untilRealMs){
+    const double usual=std::min(baseMs,outputIntervalMs/2);
+    if(refreshMs<=0||outputIntervalMs<1.8*refreshMs)return usual;
+    const double slack=std::clamp(untilRealMs-refreshMs-0.5,0.0,refreshMs);
+    return std::min(std::max(baseMs,slack),outputIntervalMs/2);
 }
 }

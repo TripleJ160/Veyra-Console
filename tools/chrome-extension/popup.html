@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  body{font:13px/1.5 system-ui,"Microsoft YaHei";width:300px;padding:12px;margin:0;background:#1b1b1f;color:#e8e8ee}
+  h3{margin:0 0 8px;font-size:14px}
+  #url{word-break:break-all;color:#9aa0a6;font-size:11px;margin-bottom:10px;max-height:48px;overflow:hidden}
+  button{width:100%;padding:8px;border:0;border-radius:6px;background:#3b82f6;color:#fff;font-size:13px;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  #status{margin-top:8px;font-size:12px;min-height:16px}
+  .ok{color:#4ade80}.err{color:#f87171}
+</style>
+</head>
+<body>
+  <h3>在 Veyra 播放</h3>
+  <div id="url"></div>
+  <button id="go" disabled>用 Veyra 打开地址</button>
+  <div id="status"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

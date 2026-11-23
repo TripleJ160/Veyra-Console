@@ -6,6 +6,7 @@
 #include "veyra/pipeline/ColorGradeInstance.h"
 #include "veyra/pipeline/AntiAliasPass.h"
 #include "veyra/pipeline/BeautyPass.h"
+#include "veyra/pipeline/HudLock.h"
 #include "veyra/beauty/FaceTracker.h"
 #include "veyra/pipeline/NrInstance.h"
 #include "veyra/pipeline/ResolutionPlan.h"
@@ -58,6 +59,7 @@ class D3D12DeviceContext;
 class CommandSlotRing;
 class FsrSrBackend;
 class FsrFgPresenter;
+class AmfFrcBackend;
 }
 
 namespace veyra::ngx {
@@ -114,12 +116,16 @@ struct EnhanceGraphDesc {
     // live: the curve reaches the present blit, the metadata the display.
     engine::HdrCurveSettings hdrCurve;
     engine::HdrMetadataSettings hdrMetadata;
+    // Custom: follow the Dolby Vision level 1 for the curve's highlight start.
+    bool doviFollow=false;
+    // Custom: also use the frame's average brightness for the knee.
+    bool doviFollowAverage=false;
     // RTX Video HDR is an SDR -> HDR stage: it only ever runs for an SDR input,
     // and an HDR source keeps the native HDR path (HDR10 / Dolby Vision) instead of
     // being tone-mapped down first.
     bool hdrWorking() const {return hdrInput&&hdrOutput;}
     bool convertVideoHdr() const {return videoHdr.enabled&&hdrOutput&&!hdrInput;}
-    bool highQualityPresentation = false; // PS5 ordinary scaling, no AI SR
+    bool highQualityPresentation = false; // high-quality screen resampling (the app sets it for every source)
     bool rgbInput = false;       // allocate direct RGBA ingestion before NGX creation
     bool yuy2Input = false;      // packed Y0 U Y1 V -> linear FP16; never subsample to NV12
     // N1: packed capture ingress (1 BGR24, 2 RGB555, 3 RGB565, 4 UYVY, 5 YVYU).
@@ -145,8 +151,9 @@ struct EnhanceGraphDesc {
     engine::FrameGenerationBackend frameGenerationBackend=engine::FrameGenerationBackend::Dlss;
     uint32_t vfgQuality=1;
     bool vfgAsyncSubmission=false; // preview-only; export retains synchronous SDK verdicts
-    bool vfgAutoRegulate=true;
+    bool vfgAutoRegulate=false;
     bool vfgFastFallback=false; // live 2X with vfgAutoRegulate: also load the next faster VFG model
+    bool hudLock=false; // Live HUD Lock (HudLock.h, from PushFPS), graph frame generation only
     uint64_t settingsRevision=1;
     engine::FlowQuality flowQuality=engine::FlowQuality::Balanced;
     engine::OpticalFlowBackend opticalFlowBackend=engine::OpticalFlowBackend::Nvidia;
@@ -172,6 +179,7 @@ struct EnhanceGraphDesc {
     std::vector<engine::NrAntiFlicker> nrLayersAntiFlicker;
     std::vector<engine::ProtectionSettings> nrLayersProtection;
     engine::ProtectionSettings protection;
+    engine::ProtectionSettings exclusion;
     // Stage-5 output stabiliser (anti-flicker). 0 keeps the pass unallocated and
     // the dispatch skipped, so a default session is byte-identical to a build
     // without it. See shaders/NrHold.hlsl.
@@ -514,6 +522,8 @@ struct EnhanceGraphDesc {
                 if(step.type==EffectType::VideoHdr)rank=7;
                 if(step.type==EffectType::FrameGeneration)rank=8;
             }
+            if(step.type==EffectType::NrStabilizer)rank=split?5:nrBeforeSr?2:3;
+            if(step.type==EffectType::Exclusion)rank=split?7:runtimeNodeOrder?5:4;
             if(rank<lastRank)return "ordered node execution is not supported by fixed dispatcher";
             lastRank=rank;
             if(step.input!=cursor||!step.processing.valid()||!step.output.valid()||
@@ -619,7 +629,11 @@ public:
     // `hardwareSurface` carries the decoded texture for paths whose surface
     // does not travel inside the AVFrame (D3D11VA). It must be provided exactly
     // when frame->format == AV_PIX_FMT_D3D11 and is unused otherwise.
-    bool process(const AVFrame* frame, double ptsMs, bool reset, FrameOutputs& out, uint64_t sourceFrameId = 0, const ColorDescription* color = nullptr, const HardwareSurfaceInput* hardwareSurface = nullptr, bool retainReferences = true, const FgAdmission& admitFg = {}, unsigned previewMultiplier = 0, bool pausedResidualRefresh = false);
+    // Optional owner-thread checkpoint: may present an older leased frame on
+    // an independent command ring only. Must not re-enter process, reset,
+    // timing collection, or structural/settings mutation. Resolving an old
+    // lease's status and recording its consumer fence are allowed. Never retained.
+    bool process(const AVFrame* frame, double ptsMs, bool reset, FrameOutputs& out, uint64_t sourceFrameId = 0, const ColorDescription* color = nullptr, const HardwareSurfaceInput* hardwareSurface = nullptr, bool retainReferences = true, const FgAdmission& admitFg = {}, unsigned previewMultiplier = 0, bool pausedResidualRefresh = false, const std::function<void()>& previewCheckpoint = {}, const AVFrame* doviEl = nullptr, const DoviP7Constants* doviP7 = nullptr);
     bool nextFrameSlotAvailable()const {
         const unsigned slot=unsigned(realFrameIndex_%2);
         if(presentationFences_[slot]&&presentationFences_[slot]->GetCompletedValue()<presentationValues_[slot])return false;
@@ -698,6 +712,9 @@ public:
     ID3D12Fence* contextFence() const;
     ID3D12Resource* baseReference(unsigned slot=0)const{return baseReferences_[slot%2].Get();}
     ID3D12Resource* sourceReference(unsigned slot=0)const{return sourceReferences_[slot%2].Get();}
+    ID3D12Resource* exclusionUi(unsigned slot)const{return exclusionUi_[slot%2].Get();}
+    ID3D12Resource* unmaskedVideo(unsigned slot)const{return videoFrame_[slot%2].Get();}
+    bool exclusionEnabled()const{return desc_.exclusion.enabled;}
     bool srEnabled() const { return srEnabled_; }
     bool nrEnabled() const { return nrEnabled_; }
     bool fgEnabled() const { return fgEnabled_; }
@@ -707,19 +724,54 @@ public:
     // the ceiling could never engage and the control would silently do nothing.
     bool hdrInput() const { return desc_.hdrInput; }
     bool videoHdrActive() const {return desc_.convertVideoHdr();}
+    // Custom: this frame took the P7 enhancement-layer reconstruction path. The present
+    // blit needs it to know that its 10-bit swapchain is quantising a 12-bit signal, which
+    // is the case where truncation leaves visible banding and dithering is worth doing.
+    bool doviP7Active() const {return p7Ready_;}
     // Custom: static HDR output tuning. The curve is read by the present blit,
     // the metadata is sent to the display.
     const engine::HdrCurveSettings& hdrCurve() const {return desc_.hdrCurve;}
     const engine::HdrMetadataSettings& hdrMetadata() const {return desc_.hdrMetadata;}
+    // Custom: whether the present blit follows the Dolby Vision level 1.
+    bool doviFollow() const {return desc_.doviFollow;}
+    bool doviFollowAverage() const {return desc_.doviFollowAverage;}
+    // Custom (P5): the enhancement layer that arrived with the frame in flight,
+    // null when this frame has none (the reconstruction then uses zero residual).
+    const AVFrame* doviElFrame() const {return doviElFrame_;}
     // Colour description of the frame in flight, so the display metadata can fall
     // back to the source's own MaxCLL / MaxFALL / mastering peak.
     const pipeline::ColorDescription& sourceColor() const {return lastSourceColor_;}
+    // Custom (P5): borrowed EL frame of the input in flight (see doviElFrame()).
+    const AVFrame* doviElFrame_ = nullptr;
+    // Custom (P5): profile 7 enhancement layer textures, uploaded per frame when
+    // the reconstruction parameters for that frame are usable. The layer is
+    // 4:2:0 10-bit, so luma and chroma are separate planes: a 16-bit single
+    // channel texture at full size and a two-channel one at half size.
+    ComPtr<ID3D12Resource> elLumaTexture_, elLumaUpload_;
+    ComPtr<ID3D12Resource> elChromaTexture_, elChromaUpload_;
+    // Custom (P7): MMR mapping coefficients, 18 float4s in a 1-pixel-high
+    // texture (t14). The pass' constant buffer is full, and this changes at most
+    // once per shot, but it is small enough to refresh every composited frame.
+    ComPtr<ID3D12Resource> elCurveTexture_, elCurveUpload_;
+    uint32_t elLumaW_ = 0, elLumaH_ = 0;
+    uint32_t elChromaW_ = 0, elChromaH_ = 0;
+    bool p7Ready_ = false;
+    float p7Params_[28] = {};
+    float p7Curve_[kDoviP7Components][kDoviP7CurveVec4][4] = {};
+    bool uploadElLuma(ID3D12GraphicsCommandList* list, const AVFrame* frame);
+    bool uploadElChroma(ID3D12GraphicsCommandList* list, const AVFrame* frame);
+    bool uploadElCurve(ID3D12GraphicsCommandList* list);
     bool hdr10Output() const { return desc_.hdrOutput && (desc_.enableFg||desc_.hdrOutputMode==engine::HdrOutputMode::Hdr10); }
     DXGI_FORMAT outputFormat() const { return hdr10Output()?DXGI_FORMAT_R10G10B10A2_UNORM:desc_.hdrOutput?DXGI_FORMAT_R16G16B16A16_FLOAT:DXGI_FORMAT_R8G8B8A8_UNORM; }
     bool highQualityPresentation() const { return desc_.highQualityPresentation; }
+    // Live HUD Lock: 0 off, 1 running, 2 asked for but its passes could not be created,
+    // 3 asked for with a frame generation that presents on its own (XeSS) or none.
+    int hudLockState() const { if(!desc_.hudLock)return 0; if(hudLock_)return 1; if(!fgEnabled_||presentSinkFg())return 3; return 2; }
     bool xessEnabled() const { return desc_.enableFg && !desc_.noFeatures && !desc_.stillImage && desc_.frameGenerationBackend==engine::FrameGenerationBackend::XeSS; }
     bool fsrEnabled() const { return desc_.enableFg && !desc_.noFeatures && !desc_.stillImage && engine::fsrFrameGeneration(desc_.frameGenerationBackend); }
     bool fsrActive() const;
+    bool amfFrcEnabled() const { return desc_.enableFg && !desc_.noFeatures && !desc_.stillImage && desc_.frameGenerationBackend==engine::FrameGenerationBackend::AmdFrc; }
+    bool amfFrcActive() const;
     const char* fsrProviderVersion() const;
     // XeSS generates in the present sink; FSR and DLSSG generate in the graph.
     // All backends consume the same guidance motion texture.
@@ -836,6 +888,7 @@ private:
     bool initFsrSr();
     bool initFsrFg();
     bool initVfg();
+    bool initAmfFrc();
     std::unique_ptr<VfgBackend> vfgBackend_;
     // RTX 40 series: opens the Blackwell-only multi-frame gate in the mapped
     // DLSS-G runtime. Never touched on any other architecture.
@@ -907,10 +960,10 @@ private:
     uint32_t nrLayerCount_=1;
     ComPtr<ID3D12Resource> presentMotion_[2];
     bool presentMotionValid_[2]={};
-    // XeSS present-path motion with the optical-flow source: per-pixel refined NVOF or
-    // FidelityFX vectors with disocclusion fill (FlowRefine/FlowFill), never zeroed. NR/SR
-    // keep the validated baseFlow_. desc.fgMotionRefine=false (or VEYRA_TEST_FLOW_REFINE=0)
-    // restores the previous input.
+    // FG motion with the optical-flow source (XeSS present path, and graph DLSS/FSR/ANR since
+    // 2026-11-13): per-pixel refined NVOF or FidelityFX vectors with disocclusion fill
+    // (FlowRefine/FlowFill), never zeroed. NR/SR keep the validated baseFlow_.
+    // desc.fgMotionRefine=false (or VEYRA_TEST_FLOW_REFINE=0) restores the previous input.
     bool flowRefine_=false;
     ComPtr<ID3D12Resource> fgFlowRefined_,fgFlowFilled_,fgBaseFlow_;
     // NVOF backward output (previous->current) for the refinement's forward-backward check
@@ -931,6 +984,9 @@ private:
     ComPtr<ID3D12Resource> flowTex_;
     ComPtr<ID3D12Resource> depthTex_;
     ComPtr<ID3D12Resource> genFrame_[kGeneratedPoolSlots];
+    ComPtr<ID3D12Resource> exclusionVideo_[2],exclusionScratch_,exclusionUi_[2];
+    ComputePass exclusionPass_;
+    bool composeExclusion(ID3D12GraphicsCommandList*,unsigned outputIndex,unsigned rawParity,bool ui);
     ComPtr<ID3D12Resource> fgDisable_[kGeneratedPoolSlots],fgDisableReadback_[kGeneratedPoolSlots],fgDisableInit_;
     std::array<const volatile uint8_t*,kGeneratedPoolSlots> fgDisableMapped_{};
     ComPtr<ID3D12Resource> nrZeroMotion_;
@@ -1123,6 +1179,10 @@ private:
     std::unique_ptr<ngx::TrueHdrBackend> videoHdrBackend_;
     std::unique_ptr<ngx::DlssFgBackend> fgBackend_;
     std::unique_ptr<gfx::FsrFgPresenter> fsrFgBackend_;
+    std::unique_ptr<gfx::AmfFrcBackend> amfFrc_;
+    std::unique_ptr<HudLock> hudLock_;  // Live HUD Lock (from PushFPS)
+    bool initHudLock();
+    void composeHudLock(ID3D12GraphicsCommandList* list,unsigned generatedSlot,unsigned heldParity);
     std::unique_ptr<gfx::FsrSrBackend> fsrSrBackend_;
     // Double SR first passes on DLSS SR / FSR (the final pass keeps the members above).
     std::unique_ptr<ngx::DlssSrBackend> firstDlssSrBackend_;
@@ -1141,6 +1201,8 @@ private:
     uint32_t dlssgLiteState_ = 0;
     std::wstring dlssgDirectory_;
     uint32_t nrSeh_ = 0;
+    // Init1Ext succeeded: Shutdown1 is owed before the snippet DLL is unloaded.
+    bool nrSnippetInitialized_ = false;
     bool fgCapsAvailable_ = false;
     int fgMultiFrameMax_ = 0;
 

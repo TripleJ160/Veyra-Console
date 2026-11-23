@@ -15,7 +15,8 @@ ColumnLayout {
             value: Math.round(veyra.volume * 100) + "%"
             VSlider {
                 implicitWidth: 150
-                from: 0; to: 1; value: veyra.volume; inputScale: 100
+                from: 0; to: veyra.maximumVolume; value: veyra.volume; inputScale: 100
+                defaultValue: 1
                 onMoved: value => veyra.volume = value
             }
         }
@@ -24,6 +25,16 @@ ColumnLayout {
             VSwitch {
                 checked: veyra.muted
                 onToggled: checked => veyra.muted = checked
+            }
+        }
+        VRow {
+            visible: veyra.sourceKind === "capture"
+            label: qsTr("本机音频监听")
+            hint: qsTr("关闭后仍可录制和保存回放；本机不播放采集声音")
+            VSwitch {
+                objectName: "pro-capture-audio-monitor"
+                checked: veyra.preferences.captureAudioMonitor !== false
+                onToggled: v => veyra.setPreference("captureAudioMonitor", v)
             }
         }
         VRow {

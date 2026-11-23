@@ -20,7 +20,7 @@ namespace veyra::engine {
 // input, and toChain()/fromChain() convert between the two. Later engine work
 // (multi-NR, ordered executor, node mode) consumes the chain directly.
 // 32 since the effect-chain extension (anti-aliasing, beauty): a full list chain is
-// 6 colours + SR + 4 NR + protection + 2 anti-aliasing + 6 beauty + HDR + FG = 22.
+// 6 colours + SR + 4 NR + protection + hold + 2 anti-aliasing + 6 beauty + HDR + exclusion + FG = 24.
 inline constexpr uint32_t kMaxChainNodes = 32;
 
 enum class EffectType : uint8_t {
@@ -32,6 +32,8 @@ enum class EffectType : uint8_t {
     FrameGeneration,    // must be the last node
     AntiAliasing,       // spatial anti-aliasing (#53): same size, repeatable, before RTX Video HDR
     Beauty,             // face restore + skin smoothing: same size, repeatable, before RTX Video HDR
+    NrStabilizer,       // one output hold pass after the NR stack
+    Exclusion,          // raw-source restoration, including generated frames
     Count
 };
 constexpr uint32_t effectTypeCount = uint32_t(EffectType::Count);
@@ -45,6 +47,8 @@ constexpr std::string_view effectTypeName(EffectType type) {
     case EffectType::FrameGeneration: return "frame-generation";
     case EffectType::AntiAliasing: return "aa";
     case EffectType::Beauty: return "beauty";
+    case EffectType::NrStabilizer: return "nr-stabilizer";
+    case EffectType::Exclusion: return "exclusion";
     case EffectType::Count: break;
     }
     return "unknown";
@@ -75,6 +79,7 @@ struct ChainNode {
     // Per-type payload; only the fields that belong to `type` are meaningful.
     ChainNrParams nr{};
     ProtectionSettings protection{};
+    float holdStrength = 0.8f, holdTolerance = 0.02f;
     ColorSettings color{};
     VideoHdrSettings videoHdr{};
     AntiAliasSettings aa{};
@@ -93,6 +98,10 @@ struct EffectChain {
     // Frame-generation detail: the node says whether it runs, this says how many
     // frames it produces. Only meaningful when a frame-generation node is on.
     uint32_t fgMultiplier = 2;
+    // 自动选择倍率开关（2026-10-24）：开启时 fgMultiplier 只是占位/上次手动值，
+    // 真正的档位在运行期由 displayFgAutoMultiplier() 按源帧率和输出上限算出；
+    // 关闭时完全按 fgMultiplier 跑（作者原版逻辑）。
+    bool fgAutoMultiplier = false;
     // Non-stage settings that still belong to a job description (they were in
     // EnhancementSettings before and stay there; copied here for completeness).
     bool fgStrictAdmission = false;
@@ -140,7 +149,7 @@ struct NodeGraphLayout {
     uint32_t inputNext = Output, nextId = 2;
     bool operator==(const NodeGraphLayout&) const = default;
 
-    // Explicit migration from an already cleaned, valid legacy linear chain.
+    // Explicit migration from a valid legacy linear chain, including protection.
     ChainValidation initialize(const EffectChain&);
     int indexOf(const EffectChain&, uint32_t id) const;
     // Partial/disconnected documents are legal, but duplicate IDs, merges,
@@ -173,13 +182,13 @@ ChainValidation restoreRuntimeOrder(const EnhancementSettings&, const ChainRunti
 // Disabled editor nodes can still be displayed; only enabled nodes execute.
 inline std::array<EffectType, effectTypeCount> listEffectOrder(bool nrActive, bool nrFirst) {
     return nrFirst
-            ? std::array{EffectType::Color, EffectType::NrEnhance, EffectType::Protection, EffectType::Beauty,
-                EffectType::AntiAliasing, EffectType::SuperResolution, EffectType::VideoHdr, EffectType::FrameGeneration}
+            ? std::array{EffectType::Color, EffectType::NrEnhance, EffectType::Protection, EffectType::NrStabilizer, EffectType::Beauty,
+                EffectType::AntiAliasing, EffectType::SuperResolution, EffectType::VideoHdr, EffectType::Exclusion, EffectType::FrameGeneration}
             : nrActive
-            ? std::array{EffectType::Color, EffectType::SuperResolution, EffectType::NrEnhance, EffectType::Protection,
-                EffectType::Beauty, EffectType::AntiAliasing, EffectType::VideoHdr, EffectType::FrameGeneration}
+            ? std::array{EffectType::Color, EffectType::SuperResolution, EffectType::NrEnhance, EffectType::Protection, EffectType::NrStabilizer,
+                EffectType::Beauty, EffectType::AntiAliasing, EffectType::VideoHdr, EffectType::Exclusion, EffectType::FrameGeneration}
             : std::array{EffectType::Color, EffectType::AntiAliasing, EffectType::SuperResolution, EffectType::NrEnhance,
-                EffectType::Protection, EffectType::Beauty, EffectType::VideoHdr, EffectType::FrameGeneration};
+                EffectType::Protection, EffectType::NrStabilizer, EffectType::Beauty, EffectType::VideoHdr, EffectType::Exclusion, EffectType::FrameGeneration};
 }
 
 // CPU-side execution contract, not proof that a GPU executor supports it.

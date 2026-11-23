@@ -19,8 +19,21 @@ struct NetworkSettings {
     NetworkBufferLevel level = NetworkBufferLevel::Auto;
     int startupPrebufferSeconds = -1;   // -1 follows the level, 0 does not wait, >0 seconds
     bool autoReconnect = true;
+    int timeshiftSeconds = 0;          // compressed packet history for live network sources
     CorruptPolicy corrupt = CorruptPolicy::Conceal;
-    bool operator==(const NetworkSettings&) const = default;
+    // Extra HTTP request headers, one "Name: value" per line. Set when the stream
+    // URL comes from a site whose CDN checks the Referer (Bilibili). Excluded from
+    // operator== on purpose: it is per-open state, and comparing it would make every
+    // resolved stream look like a settings change.
+    std::wstring requestHeaders;
+    // The User-Agent for this open. Kept separate from requestHeaders because FFmpeg
+    // has a dedicated option for it: a User-Agent inside the header block is sent
+    // twice and the CDN rejects the request.
+    std::wstring userAgent;
+    bool operator==(const NetworkSettings& other) const {
+        return level == other.level && startupPrebufferSeconds == other.startupPrebufferSeconds
+            && autoReconnect == other.autoReconnect && timeshiftSeconds == other.timeshiftSeconds && corrupt == other.corrupt;
+    }
 };
 
 inline const char* networkBufferLevelId(NetworkBufferLevel level) {
@@ -110,6 +123,9 @@ struct NetworkStats {
     uint64_t skippedFrames = 0;          // damaged pictures dropped (WaitKeyframe)
     uint64_t sessionBytes = 0;           // total bytes demuxed
     uint32_t connections = 0;            // connections opened over the session (1 + reconnects)
+    bool timeshiftEnabled = false;
+    double timeshiftStartSeconds = 0;    // earliest retained video keyframe
+    double timeshiftEndSeconds = 0;      // newest buffered media time
     std::wstring message;                // explanation shown to the user, empty when none
     bool holding() const { return state == State::Prebuffering || state == State::Buffering; }
 };

@@ -3,6 +3,7 @@
 #include "veyra/gfx/PresentSink.h"
 #include <dxgi1_6.h> // DXGI_HDR_METADATA_HDR10 (custom: HDR static metadata)
 #include "veyra/pipeline/GpuPassUtils.h"
+#include "veyra/pipeline/FramePacket.h" // custom: pipeline::DoviFrameInfo
 #include "veyra/engine/PreviewView.h"
 #include "veyra/engine/HdrOutputTuning.h"
 #include "veyra/gfx/CommandSlotRing.h"
@@ -41,9 +42,17 @@ public:
     // 2026-09-22 (X3): the provider then estimated its period from the
     // longer hand-off intervals and the source rate fell 51 -> 24/s at 44%
     // GPU. The synchronous call stays; see FG_INDEPENDENT_REPAIR_EXECUTION.
-    bool beginSourceInput();
+    // stallUs > 0: a live source; a driver low-latency Sleep longer than this,
+    // repeatedly, ends NVIDIA Low Latency for the session (ReflexSession).
+    bool beginSourceInput(uint64_t stallUs=0);
     bool beginSourceProcessing();
     void sourceProcessed(pipeline::FrameIdentity);
+    // Custom: Dolby Vision level-1 brightness of the source frame that is about
+    // to be presented. The owner thread sets it after the frame leaves the
+    // graph and before present(); an invalid value means "no RPU", which keeps
+    // the follow path from changing anything.
+    void setFrameDovi(const pipeline::DoviFrameInfo& d){latestDovi_=d;}
+    const pipeline::DoviFrameInfo& frameDovi() const {return latestDovi_;}
     PresentationSettings configurePresentation(gfx::D3D12DeviceContext&,PresentationSettings,bool fg,std::wstring& status);
     bool presentationReady(){return sink_.presentationReady();}
     gfx::PresentSink::RefreshGrid refreshGrid()const{return sink_.refreshGrid();}
@@ -56,10 +65,18 @@ public:
     // True while XeSS owns Present: the low-latency queue and the output
     // cap cannot reach provider-generated frames, so the UI greys them out.
     bool providerOwnedPresentation()const{return providerOwnedPresentation_;}
+    // Native presentation has its own command ring and a GPU-side producer
+    // fence wait. XeSS shares the graph ring and must not re-enter it.
+    bool independentQueue()const{return presentationQueue_!=nullptr;}
 
     bool reflexActive()const{return reflex_.active();}
     bool reflexDisablePending()const{return reflex_.disablePending();}
     bool reflexFailed()const{return reflex_.failed();}
+    bool reflexStalled()const{return reflex_.stalled();}
+    // Host time (steady clock, 100 ns) of the last swap-chain Present call, taken
+    // just before it as RTSS and PresentMon do: the 1% low counts these, not
+    // returns, whose spacing also carries the call's own 0.2-0.6 ms jitter.
+    int64_t lastPresentCallHost100ns()const{return lastPresentCallHost100ns_;}
     bool pacingActive()const{return sink_.pacingActive();}
     uint64_t generation()const{return generation_;}
     // Explicit integration-test capture only; never called by playback/export.
@@ -118,6 +135,7 @@ private:
     DXGI_HDR_METADATA_HDR10 lastMetadata_{};
     gfx::ReflexSession reflex_;
     uint64_t reflexFrame_=0,reflexInputFrame_=0,generation_=0;
+    int64_t lastPresentCallHost100ns_=0;
     bool providerOwnedPresentation_=false;
     PresentCapture* capture_=nullptr;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> presentationQueue_;
@@ -135,6 +153,8 @@ private:
     // One bounded GPU-only composition surface, shared by sequential lists on
     // the presentation queue. Recreated only after that queue has drained.
     Microsoft::WRL::ComPtr<ID3D12Resource> compositeTarget_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> exclusionUiTarget_,exclusionHudlessTarget_;
+    bool exclusionUiEnabled_=false;
     bool copyBeforePresent_=false,copyEligible_=false;
     unsigned inc_=0;
     static constexpr unsigned kProbeWidth=64,kProbeHeight=36,kProbeStatsBytes=5*sizeof(uint32_t);
@@ -147,6 +167,21 @@ private:
     pipeline::FrameIdentity probeIdentity_{};
     std::chrono::steady_clock::time_point probeNext_{};
     HdrCurveCoverage liveCoverage_{};
+    // Custom: Dolby Vision level 1 for the frame being presented. Purely
+    // additive: the blit uses it only when the follow switch is on.
+    pipeline::DoviFrameInfo latestDovi_{};
+    // Exponential smoothing for the follow inputs. A sliding window was used here
+    // first and was wrong: halving a running sum and its integer count keeps the
+    // ratio only when the count is even, so on odd counts the average gained a
+    // fraction each time the window overflowed and drifted above every input it had
+    // seen - a peak reading of 1.11 after inputs capped at 1.0. EMA has no such
+    // accumulation and a reset path for scene cuts.
+    double avgEma_=0.0; bool avgEmaSeeded_=false;
+    double peakEma_=0.0; bool peakEmaSeeded_=false;
+    // Custom: the knee also runs through clamp() and min(user); those flatten or
+    // step, so a smoothed input can still reach the blit as a jump. The value that
+    // actually ships is smoothed here too.
+    float smoothedStartNits_=0.0f;
     bool ensureCoverageProbe(ID3D12Device*);
     void publishLiveCoverage(const HdrCurveSettings&,pipeline::FrameIdentity);
     unsigned lastBuffer_=0;bool hasPresented_=false;

@@ -105,16 +105,17 @@ PlayerUiFacade::Frame PlayerUiFacade::poll() {
     // A GPU/provider failure arrives after command admission. Match the exact
     // accepted revision so a stale rejection cannot overwrite a newer choice.
     // Opening a source assigns a new revision to the already accepted request.
-    // VFG startup/runtime recovery keeps that revision and disables only FG.
+    // VFG/ANR startup/runtime recovery keeps that revision and disables only FG.
     // Never reconcile a rejection older than the UI's latest accepted edit.
-    const bool recoveredVfg=snapshot.rejectedRevision>=pendingFgRevision_&&
+    const bool recoveredGraphFg=snapshot.rejectedRevision>=pendingFgRevision_&&
         snapshot.desired.revision==snapshot.rejectedRevision&&
-        requestedFgBackend_==veyra::engine::FrameGenerationBackend::Vfg&&
+        (requestedFgBackend_==veyra::engine::FrameGenerationBackend::Vfg||requestedFgBackend_==veyra::engine::FrameGenerationBackend::Anr||
+         requestedFgBackend_==veyra::engine::FrameGenerationBackend::AmdFrc)&&
         snapshot.desired.frameGenerationBackend==requestedFgBackend_&&
         snapshot.desired.vfgQuality==requestedVfgQuality_&&
         requestedFgMultiplier_>1&&snapshot.desired.multiplier==1&&
         !snapshot.backendWarning.empty();
-    if(pendingFgRevision_&&(snapshot.rejectedRevision==pendingFgRevision_||recoveredVfg)&&
+    if(pendingFgRevision_&&(snapshot.rejectedRevision==pendingFgRevision_||recoveredGraphFg)&&
        pending_.frameGenerationBackend==requestedFgBackend_&&pending_.multiplier==requestedFgMultiplier_&&
        pending_.vfgQuality==requestedVfgQuality_){
         pending_.frameGenerationBackend=snapshot.desired.frameGenerationBackend;
@@ -135,8 +136,10 @@ PlayerUiFacade::Frame PlayerUiFacade::poll() {
     return frame;
 }
 
-bool PlayerUiFacade::applySettings(const veyra::engine::EnhancementSettings& settings,
+bool PlayerUiFacade::applySettings(const veyra::engine::EnhancementSettings& savedSettings,
                                   std::optional<veyra::engine::ChainRuntimeOrder> order) {
+    auto settings=savedSettings;
+    settings.content=veyra::engine::currentContentRate(settings.content);
     uint64_t acceptedRevision=0;
     if (!engine_.requestSettings(settings, order,&acceptedRevision)) return false;
     veyra::log::info("ui-settings-request", std::format(
@@ -271,11 +274,16 @@ bool PlayerUiFacade::savePreferencesLocked() {
     // still loads: the reader treats a missing tail as defaults.
     out << (reducedMotion_ ? 1 : 0) << ' ' << std::quoted(utf8(defaultPage_)) << '\n';
     const auto temporary = std::filesystem::path(preferencesPath()).concat(L".tmp");
-    { std::ofstream f(temporary, std::ios::binary | std::ios::trunc); if (!f) { error_ = L"界面状态写入失败"; return false; } f << out.str(); if (!f) { error_ = L"界面状态写入失败"; return false; } }
-    if (!MoveFileExW(temporary.c_str(), preferencesPath().c_str(), MOVEFILE_REPLACE_EXISTING)) {
+    const auto data = out.str();
+    HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) { error_ = L"界面状态写入失败"; return false; }
+    DWORD written = 0;
+    const bool ok = WriteFile(file, data.data(), DWORD(data.size()), &written, nullptr) && written == data.size() && FlushFileBuffers(file);
+    CloseHandle(file);
+    if (!ok || !MoveFileExW(temporary.c_str(), preferencesPath().c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         std::error_code ec;
         std::filesystem::remove(temporary, ec);
-        error_ = L"界面状态替换失败";
+        error_ = ok ? L"界面状态替换失败" : L"界面状态写入失败";
         return false;
     }
     return true;

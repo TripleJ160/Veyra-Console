@@ -11,12 +11,46 @@ import QtQuick.Effects
 VPage {
     id: root
     signal requestPage(string page)
+    signal requestOnboarding()
+    readonly property Item onboardingEntry: guideEntry
+    readonly property alias sourceViewport: homeScroll
+    readonly property bool compact: height < 500
+    function captureCard() {
+        for (let i = 0; i < sourceCards.count; ++i) {
+            const slot = sourceCards.itemAt(i)
+            if (slot && slot.modelData.act === "capture") return slot.card
+        }
+        return null
+    }
     // The coffee line under the title: Main opens 设置 → 赞助作者.
     signal requestSponsor()
+    // Main.qml keeps the dusk wordmark hidden while the startup intro (DuskIntro.qml) flies a
+    // copy of it in, and aims that copy at this item.
+    property bool introHold: false
+    readonly property Item wordmarkItem: wordmark
+
+    Flickable {
+        id: homeScroll
+        objectName: "source-card-scroll"
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: guideRow.top
+        anchors.bottomMargin: 8
+        contentWidth: width
+        contentHeight: Math.max(height, homeContent.implicitHeight + 24)
+        flickableDirection: Flickable.VerticalFlick
+        boundsBehavior: Flickable.StopAtBounds
+        clip: true
+        ScrollBar.vertical: VScrollBar { }
+    }
 
     ColumnLayout {
-        anchors.centerIn: parent
-        spacing: 24
+        id: homeContent
+        parent: homeScroll.contentItem
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: Math.max(root.compact ? 8 : 12, Math.round((homeScroll.height - height) / 2))
+        spacing: root.compact ? 8 : 24
 
         // .home .mark: 128px wide, drop-shadow(0 0 20px rgba(255,255,255,.35)) and the
         // 4.5s "breathe" loop: at 50% the glow is 30px at .55 and the mark scales 1.02.
@@ -26,6 +60,7 @@ VPage {
         // keep the layout the same as a plain 128px image.
         Item {
             id: mark
+            visible: !Theme.dusk
             Layout.alignment: Qt.AlignHCenter
             Layout.topMargin: -40
             Layout.bottomMargin: -40
@@ -45,8 +80,8 @@ VPage {
             Image {
                 id: logoImg
                 anchors.centerIn: parent
-                source: "logo.png"
-                sourceSize.width: 128
+                source: Theme.logoImage
+                sourceSize.width: root.compact ? 42 : 128
                 fillMode: Image.PreserveAspectFit
             }
             // A sibling MultiEffect, not layer.effect: Qt recreates a layer's effect item on
@@ -56,12 +91,52 @@ VPage {
                 source: logoImg
                 anchors.fill: logoImg
                 shadowEnabled: true
-                shadowColor: "#FFFFFF"
+                // The dusk logo carries its own neon glow; the breath adds a pink one to it.
+                shadowColor: Theme.dusk ? "#F396CE" : "#FFFFFF"
                 shadowHorizontalOffset: 0
                 shadowVerticalOffset: 0
                 blurMax: 64
                 shadowBlur: 0.625 + 0.3125 * mark.breath
-                shadowOpacity: 0.35 + 0.2 * mark.breath
+                shadowOpacity: (Theme.dusk ? 0.22 : 0.35) + 0.2 * mark.breath
+            }
+        }
+
+        // 日落: the user's wordmark (tools/qt_probe/make-wordmark-dusk.py) in place of the gamepad
+        // and the title, a baked glow breathing behind it (the software scene graph draws no
+        // MultiEffect). 0.24 of the page height, 130..210 px, so short windows keep the cards.
+        Item {
+            id: duskMark
+            visible: Theme.dusk
+            Layout.alignment: Qt.AlignHCenter
+            implicitWidth: wordmark.width
+            implicitHeight: wordmark.height
+            property real breath: 0
+            // Only while it shows, as the gamepad's breath (see above).
+            SequentialAnimation on breath {
+                running: !Theme.reduced && duskMark.visible && !root.introHold
+                loops: Animation.Infinite
+                NumberAnimation { to: 1; duration: Theme.d(2250); easing.type: Easing.InOutSine }
+                NumberAnimation { to: 0; duration: Theme.d(2250); easing.type: Easing.InOutSine }
+            }
+            Image {
+                // wordmark-dusk-glow.png is the wordmark's box grown by 186/1164 of its width.
+                readonly property real pad: wordmark.width * 186 / 1164
+                x: -pad
+                y: -pad
+                width: wordmark.width + 2 * pad
+                height: wordmark.height + 2 * pad
+                source: "wordmark-dusk-glow.png"
+                opacity: root.introHold ? 0 : 0.16 + 0.14 * duskMark.breath
+            }
+            Image {
+                id: wordmark
+                objectName: "home-wordmark"
+                height: Math.round(root.compact ? Math.min(90, root.height * 0.15)
+                                               : Math.max(130, Math.min(210, root.height * 0.24)))
+                width: Math.round(height * 1164 / 969)
+                source: "wordmark-dusk.png"
+                sourceSize: Qt.size(width, height)
+                opacity: root.introHold ? 0 : 1
             }
         }
 
@@ -73,6 +148,7 @@ VPage {
             spacing: 6
             Text {
                 Layout.alignment: Qt.AlignHCenter
+                visible: !Theme.dusk                    // the dusk wordmark says it
                 text: "Veyra NR Video"
                 color: Theme.t1
                 font.family: Theme.fontUi
@@ -134,7 +210,10 @@ VPage {
             id: srcGrid
             Layout.alignment: Qt.AlignHCenter
             Layout.preferredWidth: Math.min(1044, root.width - 48)
-            spacing: 12
+            spacing: root.compact ? 8 : 12
+            readonly property int cardWidth: root.compact
+                ? Math.max(1, Math.min(164, Math.floor((Layout.preferredWidth - 5 * spacing) / 6))) : 164
+            readonly property int cardHeight: root.compact ? 80 : 124
             // Subtitles name what is really there: the device of the last capture
             // session and the saved PS5 host; generic wording when there is none.
             // Only the subtitle follows the live state. The cards themselves are a fixed
@@ -152,6 +231,7 @@ VPage {
                 }
             }
             Repeater {
+                id: sourceCards
                 model: [
                     { glyph: "folder", title: qsTr("打开视频"), act: "file" },
                     { glyph: "video", title: qsTr("采集卡"), act: "capture" },
@@ -167,15 +247,16 @@ VPage {
                     id: slot
                     required property var modelData
                     required property int index
-                    implicitWidth: 164
-                    implicitHeight: 124
+                    readonly property alias card: srcCard
+                    implicitWidth: srcGrid.cardWidth
+                    implicitHeight: srcGrid.cardHeight
                     VRise { page: root; target: slot; d: 2 + slot.index }
                   Rectangle {
                     id: srcCard
                     readonly property var modelData: slot.modelData
                     // .srccard: 164x124, radius 14, content pinned top and bottom.
-                    width: 164
-                    height: 124
+                    width: slot.width
+                    height: slot.height
                     radius: Theme.rCard
                     color: cardHover.hovered ? Theme.card2 : Theme.card
                     border.width: 1
@@ -188,7 +269,7 @@ VPage {
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 14
+                        anchors.margins: root.compact ? 8 : 14
                         spacing: 0
                         Rectangle {
                             // .srccard .ico: 34x34, radius 10, translucent plate.
@@ -205,6 +286,10 @@ VPage {
                         ColumnLayout {
                             spacing: 3
                             Text {
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 0
+                                elide: Text.ElideRight
+                                id: sourceTitle
                                 text: modelData.title
                                 color: Theme.t1
                                 font.family: Theme.fontUi
@@ -212,6 +297,10 @@ VPage {
                                 font.weight: Font.Medium
                             }
                             Text {
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 0
+                                elide: Text.ElideRight
+                                id: sourceSubtitle
                                 text: srcGrid.cardSub(modelData.act)
                                 color: Theme.t3
                                 font.family: Theme.fontUi
@@ -229,6 +318,8 @@ VPage {
                         kind: "acc"
                     }
                     HoverHandler { id: cardHover; cursorShape: Qt.PointingHandCursor }
+                    ToolTip.visible: cardHover.hovered && (sourceTitle.truncated || sourceSubtitle.truncated)
+                    ToolTip.text: sourceTitle.text + " · " + sourceSubtitle.text
                     TapHandler {
                         id: cardTap
                         onTapped: {
@@ -321,57 +412,122 @@ VPage {
         // .recent: 692 wide, left-aligned, wrapping; "最近" in --v-t3 then 28px chips
         // with a film/image icon. Present only when there are recent files; a chip
         // whose file is gone is dimmed and does nothing (clicking it cannot open it).
-        Flow {
-            id: recent
+        // Custom: a "清空" action sits at the right edge of this block, so it lines up
+        // with 继续上次's "开始" button above it, and it wears the same primary button.
+        // Anchored Item rather than a layout: the chips' own width is what a layout
+        // would use for its implicit size, and the long file names then widened the
+        // whole column and pushed the button out of line.
+        // It confirms first, because the list is a convenience the user may still want.
+        Item {
+            id: recentBlock
             Layout.alignment: Qt.AlignHCenter
             Layout.preferredWidth: srcGrid.width
+            implicitHeight: recent.height
+            Layout.preferredHeight: implicitHeight
             visible: veyra.recentFiles.length > 0
-            spacing: 8
-            Text {
-                height: 28
-                verticalAlignment: Text.AlignVCenter
-                text: qsTr("最近")
-                color: Theme.t3
-                font.family: Theme.fontUi
-                font.pixelSize: 12
-            }
-            Repeater {
-                model: veyra.recentFiles
-                delegate: Rectangle {
-                    id: chip
-                    required property var modelData
-                    readonly property bool isImage: /\.(png|jpe?g|bmp|webp|tiff?)$/i.test(modelData.path)
-                    width: chipRow.implicitWidth + 22
+            Flow {
+                id: recent
+                anchors.left: parent.left
+                anchors.right: clearRecent.left
+                anchors.rightMargin: 12
+                anchors.top: parent.top
+                spacing: 8
+                Text {
+                    height: 28
+                    verticalAlignment: Text.AlignVCenter
+                    text: qsTr("最近")
+                    color: Theme.t3
+                    font.family: Theme.fontUi
+                    font.pixelSize: 12
+                }
+                Repeater {
+                    model: veyra.recentFiles
+                    delegate: Rectangle {
+                        id: chip
+                        required property var modelData
+                        readonly property bool isImage: /\.(png|jpe?g|bmp|webp|tiff?)$/i.test(modelData.path)
+                    width: Math.min(recent.width, chipRow.implicitWidth + 22)
                     height: 28
                     radius: 99
                     opacity: modelData.exists ? 1 : 0.45
                     color: chipHover.hovered && modelData.exists ? Qt.rgba(1, 1, 1, 0.08) : Qt.rgba(1, 1, 1, 0.04)
                     border.width: 1
                     border.color: Theme.stroke
-                    Row {
+                    RowLayout {
                         id: chipRow
-                        anchors.centerIn: parent
+                        anchors.fill: parent
+                        anchors.leftMargin: 11
+                        anchors.rightMargin: 11
                         spacing: 7
                         VIcon {
-                            anchors.verticalCenter: parent.verticalCenter
                             name: chip.isImage ? "image" : "film"
                             size: 14
                             color: chipText.color
                         }
                         Text {
                             id: chipText
-                            anchors.verticalCenter: parent.verticalCenter
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            elide: Text.ElideMiddle
                             text: modelData.label
                             color: chipHover.hovered && modelData.exists ? Theme.t1 : Theme.t2
                             font.family: Theme.fontUi
                             font.pixelSize: 12
                         }
                     }
-                    ToolTip.visible: chipHover.hovered && !modelData.exists
-                    ToolTip.text: qsTr("文件已不存在")
+                    ToolTip.visible: chipHover.hovered && (!modelData.exists || chipText.truncated)
+                    ToolTip.text: modelData.exists ? modelData.label : qsTr("文件已不存在")
                     HoverHandler { id: chipHover; cursorShape: modelData.exists ? Qt.PointingHandCursor : Qt.ArrowCursor }
                     TapHandler { onTapped: if (modelData.exists) veyra.openPath(modelData.path) }
                 }
+            }
+            }
+            VButton {
+                id: clearRecent
+                objectName: "home-clear-recent"
+                // Same right inset as the resume card's own row (10), so this button's
+                // right edge lands exactly on 开始's.
+                anchors.right: parent.right
+                anchors.rightMargin: 10
+                anchors.top: parent.top
+                text: qsTr("清空")
+                iconName: "trash"
+                primary: true
+                tip: qsTr("只清空这个列表，不会删除文件。")
+                onClicked: clearRecentConfirm.open()
+            }
+        }
+    }
+
+    Row {
+        id: guideRow
+        anchors.left: parent.left
+        anchors.bottom: parent.bottom
+        anchors.margins: 16
+        spacing: 4
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: qsTr("第一次使用？")
+            color: Theme.t2
+            font.family: Theme.fontUi
+            font.pixelSize: Theme.fsBody
+        }
+        VButton {
+            id: guideEntry
+            objectName: "home-onboarding"
+            text: qsTr("查看新手引导")
+            activeFocusOnTab: true
+            Accessible.role: Accessible.Button
+            Accessible.name: text
+            Accessible.onPressAction: clicked()
+            Keys.onReturnPressed: clicked()
+            Keys.onEnterPressed: clicked()
+            Keys.onSpacePressed: clicked()
+            border.width: activeFocus ? 2 : 1
+            border.color: activeFocus ? Theme.accent : Theme.stroke2
+            onClicked: {
+                forceActiveFocus()
+                root.requestOnboarding()
             }
         }
     }
@@ -381,4 +537,18 @@ VPage {
     VRise { target: hello; d: 1 }
     VRise { target: resume; d: 6 }
     VRise { target: recent; d: 7 }
+
+    // Custom: clearing the home page's recent list. It only drops the history (the
+    // files stay on disk), so the question says so, and the accept button repeats
+    // the action word from the button that opened it.
+    VConfirm {
+        id: clearRecentConfirm
+        objectName: "home-clear-recent-confirm"
+        glyph: "film"
+        title: qsTr("清空最近播放记录？")
+        text: qsTr("只清空这个列表，不会删除文件。")
+        acceptText: qsTr("清空")
+        rejectText: qsTr("取消")
+        onAccepted: veyra.clearRecentFiles()
+    }
 }

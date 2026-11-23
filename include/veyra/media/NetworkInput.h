@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <mutex>
+#include <windows.h>
 #include "veyra/media/NetworkSettings.h"
 extern "C" {
 #include <libavformat/avformat.h>
@@ -19,12 +20,17 @@ constexpr int kProbeTimeoutMs = 30000;       // avformat_find_stream_info
 constexpr int kReadTimeoutVodMs = 20000;     // one av_read_frame / seek on a seekable source
 constexpr int kReadTimeoutLiveMs = 10000;    // one av_read_frame on a live source
 
+inline bool datagramMediaInput(std::wstring_view path) {
+    return path.size() >= 4 && (_wcsnicmp(path.data(), L"rtp:", 4) == 0 ||
+                               _wcsnicmp(path.data(), L"udp:", 4) == 0);
+}
+
 inline bool networkMediaInput(std::wstring_view path) {
     const auto colon=path.find(L':');
     if(colon==std::wstring_view::npos||colon>5)return false;
     std::wstring scheme(path.substr(0,colon));
     for(auto& ch:scheme)ch=std::towlower(ch);
-    return scheme==L"http"||scheme==L"https"||scheme==L"rtsp";
+    return scheme==L"http"||scheme==L"https"||scheme==L"rtsp"||datagramMediaInput(path);
 }
 // A file on a server: a UNC path (\\host\share\...) or a drive letter mapped to a
 // network share (GetDriveType == DRIVE_REMOTE). Local extended paths (\\?\C:\...)
@@ -61,5 +67,24 @@ inline void networkMediaOptions(AVDictionary** options){
     static std::once_flag initialized;std::call_once(initialized,[]{avformat_network_init();});
     av_dict_set(options,"rw_timeout","15000000",0);av_dict_set(options,"timeout","15000000",0);
     av_dict_set(options,"rtsp_transport","tcp",0);
+}
+// Extra HTTP request headers, one "Name: value" per line.
+//
+// Some hosts (Bilibili's CDN among them) reject a media request that does not carry
+// the site's Referer and User-Agent, so a resolved stream URL alone is not enough.
+// FFmpeg takes them as one CRLF-separated "headers" option, and the UA has its own
+// option: putting User-Agent inside `headers` sends it twice and the CDN refuses.
+inline void networkMediaHeaders(AVDictionary** options,const std::wstring& headers,
+                                const std::wstring& userAgent={}){
+    auto setOption=[options](const char* name,const std::wstring& value){
+        if(value.empty())return;
+        const int size=WideCharToMultiByte(CP_UTF8,0,value.c_str(),static_cast<int>(value.size()),nullptr,0,nullptr,nullptr);
+        if(size<=0)return;
+        std::string utf8(static_cast<size_t>(size),'\0');
+        WideCharToMultiByte(CP_UTF8,0,value.c_str(),static_cast<int>(value.size()),utf8.data(),size,nullptr,nullptr);
+        av_dict_set(options,name,utf8.c_str(),0);
+    };
+    setOption("headers",headers);
+    setOption("user_agent",userAgent);
 }
 }

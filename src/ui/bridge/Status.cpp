@@ -1,4 +1,5 @@
 // QML bridge: Status responsibilities.
+#include "veyra/media/FormatBadgeWindow.h"
 #include "../QmlPlayerBridge_p.h"
 
 namespace veyra::ui {
@@ -112,7 +113,7 @@ QString QmlPlayerBridge::flowBackend() const {
     // name; report the fact we do have and let it read as unmeasured otherwise.
     const auto& s = impl_->snapshot;
     if (s.flowPerf == 0) return {};
-    return QStringLiteral("GPU 光流");
+    return tr("GPU 光流");
 }
 
 int QmlPlayerBridge::opticalFlowChoice() const { return int(settings().opticalFlowBackend); }
@@ -196,6 +197,19 @@ QVariantList QmlPlayerBridge::stageTimings() const {
         out << item;
     }
     return out;
+}
+
+QVariantList QmlPlayerBridge::cpuTimings() const {
+    const auto& flow=impl_->snapshot.metrics.flow;
+    using Stage=diagnostics::CpuStage;
+    const auto row=[&](const QString& label,Stage stage) {
+        const auto& sample=flow.cpuTiming[size_t(stage)];
+        const bool measured=queuedFramesKnown()&&sample.samples&&sample.p95.has_value();
+        return QVariantMap{{"label",label},{"measured",measured},{"p95",measured?*sample.p95:0.0}};
+    };
+    return {row(tr("解码"),Stage::Decode),row(tr("提交"),Stage::Submit),
+        row(tr("命令槽等待"),Stage::SlotWait),row(tr("GPU 就绪等待"),Stage::ReadyWait),
+        row(tr("调度等待"),Stage::DeadlineWait),row(tr("呈现"),Stage::Present)};
 }
 
 QVariantMap QmlPlayerBridge::nodeTimings() const {
@@ -291,6 +305,8 @@ QVariantMap QmlPlayerBridge::nodeTimings() const {
             if (!xess && live && flow.counters.fgSkippedBeforeEval > 0 && flow.counters.fgEvaluated < flow.counters.fgCandidate)
                 waiting = QStringLiteral("fg-skipped");
             break;
+        case engine::EffectType::NrStabilizer:
+        case engine::EffectType::Exclusion:
         default: waiting = QStringLiteral("untimed"); break;
         }
         if (!n.enabled) { publish(i, QStringLiteral("disabled"), std::nullopt); continue; }
@@ -407,16 +423,9 @@ void QmlPlayerBridge::updateRunStatus() {
     else if (s.transport == engine::TransportState::Paused) status = tr("已暂停");
     QStringList options;
     const auto chosen=settings();
-    if(chosen.content!=engine::ContentRate::Transport){
-        QString cadence;
-        switch(chosen.content){
-        case engine::ContentRate::Auto:cadence=tr("自动剔除重复帧");break;
-        case engine::ContentRate::Fps30:cadence=tr("识别 %1 fps 内容").arg(30);break;
-        case engine::ContentRate::Fps50:cadence=tr("识别 %1 fps 内容").arg(50);break;
-        case engine::ContentRate::Fps60:cadence=tr("识别 %1 fps 内容").arg(60);break;
-        case engine::ContentRate::Capture60To30:cadence=tr("采集 60→30");break;
-        default:break;
-        }
+    const auto content=engine::currentContentRate(chosen.content);
+    if(content!=engine::ContentRate::Transport){
+        const auto cadence=content==engine::ContentRate::Capture60To30?QStringLiteral("60→30"):tr("自动去除");
         if(s.running&&rate.halfRate)options<<tr("%1 · 当前约 %2 fps").arg(cadence).arg(rate.contentFps,0,'f',0);
         else if(s.running&&rate.deduplicating)options<<tr("%1 · 去重后约 %2 fps").arg(cadence).arg(rate.contentFps,0,'f',0);
         else if(s.running&&!s.capture)options<<tr("%1 · 当前来源未去重").arg(cadence);
@@ -469,14 +478,24 @@ void QmlPlayerBridge::updateRunStatus() {
             options<<tr("输出限帧 · 跟随屏幕");
         else options<<tr("输出限帧 · %1 fps").arg(i.presentation.customFps,0,'f',1);
     }
-    // On NVIDIA the three states own the low queue, so the summary names them.
+    // On NVIDIA the low-latency choice owns the low queue.
     if(nvidiaLowLatencyAvailable()&&i.presentation.nvidiaLowLatency!=engine::NvidiaLowLatency::Off){
         if(s.running&&s.presentationEffective.nvidiaLowLatency==engine::NvidiaLowLatency::Off)options<<tr("英伟达低延迟 · 当前未生效");
-        else options<<(i.presentation.nvidiaLowLatency==engine::NvidiaLowLatency::Boost?tr("英伟达低延迟 · 开＋增强"):tr("英伟达低延迟 · 开"));
+        else options<<tr("英伟达低延迟 · 开");
     }
     else if(i.presentation.enabled)options<<(s.running&&!s.presentationEffective.enabled?tr("低延迟队列 · 当前未生效"):tr("低延迟队列"));
     if(!s.capture&&std::abs(s.playbackRate-1.0)>.001)options<<tr("播放速度 %1×").arg(s.playbackRate,0,'f',2);
     if(i.compareMode!=0)options<<tr("画面对比 · 补帧暂停");
+    // Ported from PushFPS: frame pacing repair and Live HUD Lock state.
+    if(s.running&&!s.image&&s.applied.multiplier>1&&s.applied.pacingRepair){
+        if(s.pacingFrames>0)options<<tr("帧节奏修复 · 已重排 %1%").arg(qRound(100.0*double(s.pacingRepaired)/double(s.pacingFrames)));
+        else options<<tr("帧节奏修复 · 等待去重测出帧率");
+    }
+    if(s.running&&!s.image&&s.applied.multiplier>1&&s.applied.hudLock){
+        if(s.hudLockState==1)options<<tr("HUD 自动锁定");
+        else if(s.hudLockState==2)options<<tr("HUD 自动锁定 · 无法启用");
+        else if(s.hudLockState==3)options<<tr("HUD 自动锁定 · 当前补帧方式不支持");
+    }
     QStringList detail;
     // Live output hint: also shown under the 倍率 control (fgDisplayHint).
     QString fgHint;
@@ -497,10 +516,15 @@ void QmlPlayerBridge::updateRunStatus() {
             case engine::FrameGenerationBackend::XeSS: backend = tr("XeSS"); break;
             case engine::FrameGenerationBackend::Fsr: backend = tr("FSR 3.1"); break;
             case engine::FrameGenerationBackend::Fsr4: backend = tr("FSR 4 ML"); break;
+            case engine::FrameGenerationBackend::Anr: backend = QStringLiteral("ANR FG"); break;
+            case engine::FrameGenerationBackend::AmdFrc: backend = QStringLiteral("AMD FRC"); break;
             case engine::FrameGenerationBackend::Vfg: backend = QStringLiteral("NVIDIA VFG"); break;
             }
             detail << tr("补帧 %1X · %2").arg(s.applied.multiplier)
                           .arg(backend);
+            // Adaptive multiplier (from PushFPS): the multiplier the last pair used.
+            if (s.applied.fgAdaptive && s.previewFgMultiplier > 1 && s.applied.multiplier > 2)
+                detail << tr("自适应 · 现在 %1X").arg(s.previewFgMultiplier);
         }
         else detail << tr("未补帧");
         if (s.applied.multiplier > 1 && impl_->compareMode != 0) detail << tr("补帧暂停");
@@ -564,5 +588,33 @@ void QmlPlayerBridge::updateRunStatus() {
     if (!recheckNotice.isEmpty()) emit notice(recheckNotice, recheckFailed);
 }
 
+
+void QmlPlayerBridge::showFormatBadge(const engine::PlayerSnapshot& s) {
+    // 临时停用：格式徽章窗口在开符号构建下必崩（见 FormatBadgeWindow::show），
+    // 它把真正的崩溃信号盖住了。只停调用，代码留着。
+    impl_->formatBadgeSession = s.sessionId;
+    if (impl_->videoWindow == nullptr) return;
+    if (!impl_->formatBadge) {
+        impl_->formatBadge = std::make_unique<media::FormatBadgeWindow>();
+        if (!impl_->formatBadge->create(impl_->videoWindow)) {
+            impl_->formatBadge.reset();
+            return;
+        }
+    }
+    const QString label = uiText(s.sourceHdrLabel);
+    const QString title = label.isEmpty() ? QStringLiteral("SDR") : label;
+    QStringList detailParts;
+    const QString rate = sourceRateText();
+    if (!rate.isEmpty()) detailParts << rate;
+    QString summary = sourceSummary();
+    if (!summary.isEmpty()) detailParts << summary.replace(QLatin1Char('x'), QString::fromUtf8("×"));
+    const QString detail = detailParts.join(QString::fromUtf8(" · "));
+    impl_->formatBadge->show(impl_->videoWindow, title.toStdWString(), detail.toStdWString());
+    veyra::log::info("format-badge", std::format("shown title={} detail={} session={}",
+        title.toStdString(), detail.toStdString(), s.sessionId));
+    QTimer::singleShot(3200, this, [this]() {
+        if (impl_->formatBadge) impl_->formatBadge->hide();
+    });
+}
 
 } // namespace veyra::ui

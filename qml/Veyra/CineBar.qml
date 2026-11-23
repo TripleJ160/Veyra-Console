@@ -50,7 +50,7 @@ Rectangle {
     }
     implicitHeight: 92
     radius: 30
-    color: Qt.rgba(22 / 255, 22 / 255, 26 / 255, 0.86)
+    color: Theme.shade(22, 22, 26, 0.86)
     border.width: 1
     border.color: Qt.rgba(1, 1, 1, 0.1)
 
@@ -233,6 +233,9 @@ Rectangle {
                     // that moved every tick made it present ~50 times a second, more often than
                     // a film plays, so OBS game capture could lock onto the pill.
                     property real shownProgress: veyra.progress
+                    // Where the last scrub seek was sent, so a release that lands on
+                    // the same spot does not interrupt it with a duplicate.
+                    property real lastSeekTarget: -1
                     Timer {
                         interval: 500; repeat: true; running: bar.visible
                         onTriggered: seekArea.shownProgress = veyra.progress
@@ -247,13 +250,23 @@ Rectangle {
                     }
                     Timer {
                         id: scrubSeek
-                        interval: 120
-                        onTriggered: if (seekArea.scrubbing) veyra.seekTo(seekArea.scrubFrac * veyra.duration)
+                        // Restarted on every pointer move (see the MouseArea below), so it
+                        // fires only once the drag settles. Seeking mid-drag makes two
+                        // seeks overlap and they interrupt each other: a network source
+                        // re-opens its read on each one, which is what made a drag look
+                        // like a freeze. newBV defers the same way (1 s there).
+                        interval: 250
+                        onTriggered: {
+                            if (!seekArea.scrubbing) return
+                            const target = veyra.timelineSeconds(seekArea.scrubFrac)
+                            seekArea.lastSeekTarget = target
+                            veyra.seekTo(target)
+                        }
                     }
                     Timer {
                         id: thumbnailDelay
                         interval: 120
-                        onTriggered: seekArea.thumbnailBucket = Math.floor(seekArea.hoverFrac * veyra.duration / 2)
+                        onTriggered: if (!veyra.liveTimeshift.enabled) seekArea.thumbnailBucket = Math.floor(seekArea.hoverFrac * veyra.duration / 2)
                     }
                     Rectangle {
                         id: rail
@@ -263,11 +276,21 @@ Rectangle {
                         radius: 9
                         color: Qt.rgba(1, 1, 1, 0.14)
                         Behavior on height { NumberAnimation { duration: Theme.d(300); easing.bezierCurve: Theme.spring } }
+                        // White; the sunset gradient along the rail in the dusk palette.
                         Rectangle {
                             width: parent.width * seekArea.frac
                             height: parent.height
                             radius: 9
                             color: "#FFFFFF"
+                            visible: !Theme.accentGradient
+                        }
+                        VAccentFill {
+                            width: parent.width * seekArea.frac
+                            height: parent.height
+                            radius: 9
+                            farEnd: true
+                            span: parent.width
+                            visible: Theme.accentGradient
                         }
                     }
                     // .seek .thumb: 11px dot, scale 0 -> 1 over .4s --spring on hover.
@@ -283,8 +306,8 @@ Rectangle {
                     // over .4s --spring from its bottom centre.
                     Rectangle {
                         visible: opacity > 0.01
-                        width: 144
-                        height: 104
+                        width: veyra.liveTimeshift.available ? 84 : 144
+                        height: veyra.liveTimeshift.available ? 26 : 104
                         radius: 8
                         color: "#000000"
                         border.width: 1
@@ -306,7 +329,8 @@ Rectangle {
                             asynchronous: true
                             cache: true
                             fillMode: Image.PreserveAspectFit
-                            source: (seekMouse.containsMouse || seekArea.scrubbing) && seekArea.thumbnailBucket >= 0
+                            source: !veyra.liveTimeshift.enabled &&
+                                    (seekMouse.containsMouse || seekArea.scrubbing) && seekArea.thumbnailBucket >= 0
                                     ? "image://veyra-thumb/" + veyra.thumbnailGeneration + "/" + (seekArea.thumbnailBucket * 2000)
                                     : ""
                         }
@@ -325,7 +349,9 @@ Rectangle {
                             height: 23
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
-                            text: veyra.formatTime(seekArea.hoverFrac * veyra.duration)
+                            text: veyra.liveTimeshift.enabled
+                                  ? "−" + veyra.formatTime(veyra.liveTimeshift.end - veyra.timelineSeconds(seekArea.hoverFrac))
+                                  : veyra.formatTime(veyra.timelineSeconds(seekArea.hoverFrac))
                             color: Theme.t1
                             font.family: Theme.fontMono
                             font.pixelSize: 11
@@ -342,7 +368,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         preventStealing: true
-                        enabled: veyra.duration > 0 && !veyra.isCapture
+                        enabled: veyra.timelineSeekable
                         onEnabledChanged: if (!enabled && seekArea.scrubbing) {
                             scrubSeek.stop()
                             seekArea.scrubbing = false
@@ -354,24 +380,33 @@ Rectangle {
                             seekArea.thumbnailBucket = -1
                         }
                         onPressed: mouse => {
+                            seekArea.lastSeekTarget = -1
                             seekArea.scrubFrac = seekArea.fractionAt(mouse.x)
                             seekArea.scrubbing = true
                         }
                         onPositionChanged: mouse => {
                             if (seekArea.scrubbing) {
                                 seekArea.scrubFrac = seekArea.fractionAt(mouse.x)
-                                // Scrubbing seeks as it goes, 120 ms apart.
-                                if (!scrubSeek.running) scrubSeek.start()
+                                // restart(), not start(): each move pushes the deadline
+                                // back, so the seek waits for the pointer to settle.
+                                scrubSeek.restart()
                             }
                             thumbnailDelay.restart()
                         }
                         onReleased: mouse => {
-                            const target = seekArea.fractionAt(mouse.x) * veyra.duration
+                            const target = veyra.timelineSeconds(seekArea.fractionAt(mouse.x))
                             scrubSeek.stop()
                             seekArea.shownProgress = seekArea.fractionAt(mouse.x)
                             seekArea.scrubbing = false
                             veyra.logUi("ui-seek", "targetSeconds=" + target.toFixed(3))
-                            veyra.seekTo(target)
+                            // The timer may have fired on the last move and already
+                            // started a seek to (very nearly) this position. A second
+                            // request would interrupt that one and cost another full
+                            // re-position, so a near-identical target is dropped.
+                            if (Math.abs(target - seekArea.lastSeekTarget) > 0.5) {
+                                seekArea.lastSeekTarget = target
+                                veyra.seekTo(target)
+                            }
                         }
                         onCanceled: {
                             scrubSeek.stop()
@@ -381,9 +416,17 @@ Rectangle {
                 }
                 Text {
                     text: veyra.durationText
+                    visible: !veyra.liveTimeshift.available
                     color: Theme.t3
                     font.family: Theme.fontMono
                     font.pixelSize: 10
+                }
+                VButton {
+                    objectName: "cine-return-live"
+                    visible: veyra.liveTimeshift.available
+                    ghost: true
+                    text: qsTr("回到直播")
+                    onClicked: veyra.returnToLive()
                 }
             }
         }
@@ -399,7 +442,9 @@ Rectangle {
             VPill {
                 key: ""
                 value: veyra.currentPresetName + " · " + veyra.currentNrLookName
-                maxTextWidth: 145
+                // Reserve space for upstream's rotation action as well as volume,
+                // fullscreen and hide in this fixed-width controls group.
+                maxTextWidth: 96
                 onClicked: presetMenu.openAt(this, "up")
                 Rectangle {
                     width: 7; height: 7; radius: 3.5
@@ -408,9 +453,9 @@ Rectangle {
             }
 
             Item {
-                implicitWidth: 104
+                implicitWidth: 146
                 implicitHeight: 32
-                Layout.minimumWidth: 104
+                Layout.minimumWidth: 146
                 RowLayout {
                     anchors.fill: parent
                     spacing: 6
@@ -421,10 +466,17 @@ Rectangle {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         Layout.minimumWidth: 72
-                        from: 0; to: 1; value: veyra.volume; inputScale: 100
+                        from: 0; to: veyra.maximumVolume; value: veyra.volume; inputScale: 100
+                        defaultValue: 1
                         valueFromModel: true
                         fullKnobHitArea: true
                         onMoved: moved => veyra.volume = moved
+                    }
+                    VSliderValue {
+                        Layout.preferredWidth: 36
+                        slider: volumeSlider
+                        text: Math.round(veyra.volume * 100) + "%"
+                        color: Theme.t2; pixelSize: 10
                     }
                 }
             }

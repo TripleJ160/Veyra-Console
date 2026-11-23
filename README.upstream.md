@@ -1,14 +1,71 @@
 <div align="center">
 
-<img src="assets/veyra-app-icon.png" alt="Veyra" width="140">
+<img src="assets/veyra-wordmark-sun.gif" alt="Veyra NR · transparent animated wordmark and sun" width="480">
 
 # Veyra
+
+<!-- veyra-creator-and-tutorials:start -->
+<p align="center">
+  <strong>作者主页 / Creator</strong>：
+  <a href="https://x.com/likely2002">X · @likely2002</a>
+  &nbsp;|&nbsp;
+  <a href="https://www.youtube.com/@Likely7Ai">YouTube · @Likely7Ai</a>
+</p>
+
+<p align="center">
+  <strong>视频教程 / Video tutorials</strong>：
+  <a href="https://www.youtube.com/watch?v=ZJ42jzNAbik">English · YouTube</a>
+  &nbsp;|&nbsp;
+  <a href="https://www.bilibili.com/video/BV1KvsE6bEPw/">中文 · 哔哩哔哩</a>
+</p>
+<!-- veyra-creator-and-tutorials:end -->
+
+<!-- veyra-main-pr-integration -->
+**Veyra 2.2.0** · [Download and release notes](https://github.com/Likely7/Veyra-NRVideo/releases/tag/v2.2.0)
+
 
 ### Real-time GPU Video Enhancement for Windows
 
 **Super Resolution · Denoising · HDR · Frame Generation · Capture · PS5 / Xbox / PC Streaming**
 
 Turn local video, capture cards and game streaming into one real-time GPU enhancement pipeline.
+
+---
+
+### 💜 Community Support / 社区支持
+
+**English**
+
+A huge thank you to the Pump.fun community for supporting Veyra!
+
+I've received creator fees from a community-created Veyra token. These contributions will help support the continued development of Veyra.
+
+**中文**
+
+非常感谢 Pump.fun 社区对 Veyra 的支持！
+
+我已经从社区自行创建的 Veyra 代币中领取了创作者手续费。这些收入将帮助支持 Veyra 的持续开发。
+
+**Token Contract Address (CA) / 代币合约地址：**
+
+`i6Aop7z5qLaY47kseaoUt6kGq4Pi2ySg8j7cxRkpump`
+
+**Disclaimer / 免责声明：** This token was independently created by the community and is not an official Veyra release or investment recommendation. Veyra remains free and open-source.
+
+该代币由社区独立创建，并非 Veyra 官方发行的代币，也不构成投资建议。Veyra 仍然是免费开源软件。
+
+---
+
+<br>
+
+<p align="center">
+  <a href="https://gitnova.dev/r/Likely7/Veyra-NRVideo">
+    <img src="assets/veyra-trending-cpp.svg" alt="GitHub Trending C++ Daily #1 — November 13–15, 2026" width="385">
+  </a>
+  <a href="https://gitnova.dev/r/Likely7/Veyra-NRVideo">
+    <img src="assets/veyra-trending-global.svg" alt="GitHub Trending Global Daily #11 — November 13–14, 2026" width="385">
+  </a>
+</p>
 
 <br>
 
@@ -20,7 +77,7 @@ Turn local video, capture cards and game streaming into one real-time GPU enhanc
 
 <br>
 
-**79K+ cumulative Veyra portable-package downloads** (79,332 as of 2026-11-08) · **103K+ downloads across all GitHub Release assets** (103,337 including source archives, checksums and images). [GitHub Releases](https://github.com/Likely7/Veyra-NRVideo/releases) · Counts are download events, not unique users.
+**178K+ Veyra portable-package downloads** (178,996, including historical `.7z` packages and virtual-camera builds) · **214K+ total GitHub Release asset downloads** (214,277 including source archives, checksums and images). [GitHub Releases](https://github.com/Likely7/Veyra-NRVideo/releases) · As of 2026-11-18 (Pacific Time). Download events, not unique users.
 
 <br>
 
@@ -55,7 +112,13 @@ Turn local video, capture cards and game streaming into one real-time GPU enhanc
 <h2 align="center">⭐ Star History</h2>
 
 <p align="center">
-  <img src="assets/star-history.svg" alt="Veyra Star History" width="900">
+  <a href="https://gittrend.io/repo/Likely7/Veyra-NRVideo">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://gittrend.io/api/badge/chart/Likely7/Veyra-NRVideo.svg?theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://gittrend.io/api/badge/chart/Likely7/Veyra-NRVideo.svg" />
+      <img src="https://gittrend.io/api/badge/chart/Likely7/Veyra-NRVideo.svg" alt="Veyra Star History" width="900" />
+    </picture>
+  </a>
 </p>
 
 <p align="center">
@@ -64,79 +127,40 @@ Turn local video, capture cards and game streaming into one real-time GPU enhanc
 
 ---
 
-**2.1.2 update:** dual SR, SR-then-downsample, NVIDIA Low Latency, experimental RX 7000 NR and capture/FG/audio/volume fixes. [Full update and migration](docs/RELEASE_NOTES_2.1.2.md).
-
-**2.1.1 historical release, 2026-10-27:** processed-picture recording with audio,90° playback rotation, per-layer NR percentage controls and export sizing, event-driven refresh/VRR/HDR queries, AMD HDR+NR handling, AA ordering, capture timestamp handling, NR shutdown, popup layout, screenshots and fullscreen fixes. [All changes since2.1.0](docs/RELEASE_NOTES_2.1.1.md).
-
 
 **New-effect cost examples:** RTX5070 standard4K anti-aliasing fixtures: FXAA~0.15ms, SMAA/MLAA~0.30ms. Final single-face mesh beauty:1080p~0.93ms,4K~1.42ms. Costs vary with content/hardware; no local AMD speedup percentage was measured. [Conditions and limits](docs/history/releases/RELEASE_NOTES_2.1.0.md).
 
 **📖 [English User Guide / GitHub Wiki](https://github.com/Likely7/Veyra-NRVideo/wiki)** — installation, software setup, capture card compatibility, troubleshooting, and community-tested solutions. [中文知识库（飞书）](https://qcnv4i7tnd7l.feishu.cn/wiki/space/7688258025282358221?ccm_open_type=lark_wiki_spaceLink&open_tab_from=wiki_home).
 
-**2.1.5:** Smoother frame pacing after capture deduplication and preview correction for invalid capture timestamps. [Full changes](docs/RELEASE_NOTES_2.1.5.md).
+## Latest update · 2.2.0
 
-**2.1.4:** Optional VB-CABLE capture audio, DLSS/FSR/RTX dual super resolution, NVIDIA DLAA, HDR wide-gamut restoration, NR inference reuse, 1% low FPS, and recording and compatibility fixes. [Full changes and settings migration](docs/RELEASE_NOTES_2.1.4.md).
+- Windows installers with a selectable location, optional desktop shortcut and uninstaller. Portable ZIPs remain available. Both include signed in-app update support.
+- Real-time subtitle translation with an optional local model, a processed virtual camera output, and improved fullscreen scaling.
+- Capture and audio stability fixes, screen-capture drag cropping, segmented recording, RTP/UDP multicast and live timeshift.
 
-**2.1.3:** Three RTX Video SR families and independent second-pass models, medium defaults, inline NR web/list editing, RTX30 VFG compatibility, RX7000 multi-GPU and seeking/menu fixes. [Full changes, comparison and migration](docs/RELEASE_NOTES_2.1.3.md).
+[Full 2.2.0 changes, test results and image comparisons](https://github.com/Likely7/Veyra-NRVideo/releases/tag/v2.2.0)
 
 ## Highlights
 
-**2.0.4 NR controls:** each NR layer's **Enhancement delta → Total strength** now reaches 5. **Picture control** defaults off; enable it and select Automatic or Manual. Automatic values now adapt separately to styles 0/1/2, with an amount slider (0 retains raw strength, 1 applies full correction). The nine manual controls cover hue, chroma, neutral tint, source color retention, lightness retention, shadows, highlights, local compression and temporal stability. **Use this style’s automatic values** provides a manual starting point. Switching modes keeps manual values; turning control off preserves the original residual algorithm. Five extrapolates one inference's residual, and protection reduces the corresponding changes; it cannot promise full gain five with no artifacts on every video. Presets, List/Node sessions, PNGs and video exports share the settings. [Local validation and known limits](docs/history/reports/NR_STRENGTH_PROTECTION_EXECUTION_2026-10-05.md).
+**NR controls:** each NR layer's **Enhancement delta → Total strength** now reaches 5. **Picture control** defaults off; enable it and select Automatic or Manual. Automatic values now adapt separately to styles 0/1/2, with an amount slider (0 retains raw strength, 1 applies full correction). The nine manual controls cover hue, chroma, neutral tint, source color retention, lightness retention, shadows, highlights, local compression and temporal stability. **Use this style’s automatic values** provides a manual starting point. Switching modes keeps manual values; turning control off preserves the original residual algorithm. Five extrapolates one inference's residual, and protection reduces the corresponding changes; it cannot promise full gain five with no artifacts on every video. Presets, List/Node sessions, PNGs and video exports share the settings. [Local validation and known limits](docs/history/reports/NR_STRENGTH_PROTECTION_EXECUTION_2026-10-05.md).
 
-- **Rebuilt interface:** Home, Cinema, Professional List, Nodes, Colour, Export and Settings; Simplified/Traditional Chinese, English and Japanese.
+- **Rebuilt interface:** Home, Cinema, Professional List, Nodes, Colour, Export and Settings; Simplified/Traditional Chinese, English, Japanese and Korean.
 - **Node editing and layered NR:** executable connections, independent NR/colour parameters, separate List/Node configurations, sessions and presets.
 - **PC / Xbox streaming:** Moonlight/Sunshine-compatible PC streaming and unofficial experimental Xbox support, alongside PS5, capture cards and screen capture.
 - **New export workflow:** editable ordered queue, trimming, MP4/MKV, multiple audio/embedded subtitle tracks, cancellation/retry and completion sound.
 - **Enhancement and compatibility:** SF310.9.16 performance/legacy models, NVIDIA original for RTX50 and AMD lmxxf, DLSS/XeSS/FSR options, capture improvements and a persistent OBS Game Capture switch with restart confirmation. Full details are in the Release.
 
-**Current version: [2.1.5](https://github.com/Likely7/Veyra-NRVideo/releases/tag/v2.1.5)** · [Full bilingual update](docs/RELEASE_NOTES_2.1.5.md).
-
-## New in 2.1.2
-
-- **SR:** true dual RTX Video SR with separate second-pass controls, plus SR-then-downsample; ordinary 8K retained, new graphs check VRAM budget.
-- **GPU options:** NVIDIA Low Latency Off / On / On + Boost; experimental RX 7000 RedDuke NR, Small/Original and per-layer scale; separate RX 9000 path retained.
-- **FG:** sparse-noise-tolerant full-frame dedup, remove coarse generated-frame discard, smoothed anchors, optional VFG regulation, adaptive VSync capacity wait capped at 3 ms.
-- **Capture/audio:** WGC high-refresh cadence, ready-immediate no-FG capture, first-copy 60→30, Dolby/DTS carriers on generic PCM pins.
-- **Controls:** F7 screenshot / F8 recording in game mode too; Cinema volume dragging, endpoints, Enter/click-away confirmation and focus.
-
-[All changes since 2.1.1, measurements and migration](docs/RELEASE_NOTES_2.1.2.md) · [Build and corresponding source](docs/BUILD_2.1.2.md).
-
-## New in 2.1.1
-
-- **Interface and SR defaults:** software UI drawing by default, an optional GPU renderer with restart confirmation, and RTX Video SR high as the new SR model selection; saved model choices are retained.
-
-- **Record and rotate:** record the processed picture with player audio; rotate playback90° in Cinema/Professional with matching preview and window layout.
-- **NR sizing:** per-layer25–100% scale controls, saved presets/sessions and fixed/percentage video-export inference sizes with independent output resolution.
-- **Display and frame generation:** background event-driven refresh/VRR/HDR queries, shared signal-panel refresh and HDR-cache recovery.
-- **Enhancement:** correct AMD FSR-off state, native-HDR NR proxy/reconstruction and List-mode AA placement after NR.
-- **Interaction and lifecycle:** popup first-open layout, real screenshot paths/formats, fullscreen/maximized restoration, playlist key ownership, capture preparation timestamps and NR/NVAPI teardown.
-
-[Full2.1.1 update](docs/RELEASE_NOTES_2.1.1.md) · [Build and corresponding source](docs/BUILD_2.1.1.md).
-
-## New in 2.1.0
-
-- **AMD NR0.44:** RX9000 Small/Original models via the per-layer performance switch(default on), saved in presets/sessions/export; explicit asset errors, no new RX6000/7000 support.
-- **Anti-aliasing:** independent FXAA/SMAA/MLAA, List/Nodes, quality/strength controls, HDR and List export; experimental temporal SMAA defaults off.
-- **Beauty and original-face restoration:** separate switches, up to six layers,468-point contours, eye/brow/lip exclusion, per-frame detection and smoothing; restoration mixes the pre-effect source back into faces.
-- **Capture modes:** native enumeration fallback, driver ranges/steps/custom-size checks, searchable legacy list, exact rate/pixel-format matching, explicit substitution rejection, saved/resumed capture settings.
-- **Network and AVerMedia audio:** shared buffering/reconnect, slow-server buffering status, HLS/interlaced damage handling, throttled subtitle scanning; vendor multichannel audio, non-PCM confirmation, complete-payload decode and bounded recovery.
-- **Other fixes:** game-mode handoff/hotkeys/scaling/static resize, fullscreen transport/cursor, disabled-node order and export protocol consistency, home/sponsor page, corrected Bilibili profile and complete new translations.
-
-[Complete2.0.9→2.1.0 update, instructions and validation limits](docs/history/releases/RELEASE_NOTES_2.1.0.md). The exact user-tested packages are promoted without rebuilding/repacking; internal2.1.0-test labels/manifests remain, PE2.1.0.0.
-
 ## Install and upgrade
 
-Download **Veyra-2.1.5-NVIDIA-win64-portable.zip** or **Veyra-2.1.5-AMD-win64-portable.zip** for Veyra's active GPU. Extract with Windows or 7-Zip into a new writable folder and run **veyra_qml_ui.exe**. You need one GPU package to run the application; source assets are only for rebuilding. Windows 11 x64 and DirectX 12 are required; Qt and approved runtimes are included, while GPU/capture drivers are installed separately. Backend hardware requirements vary; most local tests used an RTX 5070.
+Download the [Veyra 2.2.0 Setup EXE or portable ZIP](https://github.com/Likely7/Veyra-NRVideo/releases/tag/v2.2.0) for Veyra's active GPU. Run Setup, or extract the portable ZIP with Windows or 7-Zip into a new writable folder and launch **Veyra.exe**. You need one GPU package to run the application; source assets are only for rebuilding. Windows 11 x64 and DirectX 12 are required; Qt and approved runtimes are included, while GPU/capture drivers are installed separately. Backend hardware requirements vary; most local tests used an RTX 5070.
 
 Start with effects off, check picture/sound, then enable effects individually. High resolution, layered NR and frame generation increase GPU/VRAM requirements.
 
 **The 1.4.4 UI guide is obsolete.** Version 2.0 uses separate settings. Retain the old version for rollback; do not overwrite the new package with old `veyra.ini`, an entire `runtime_local` folder or mixed DLLs.
 
-**Upgrade 2.1.1→2.1.2:** prefer extracting into a new folder; copy only `runtime_local/user-data-2.0.0` and custom `runtime_local/luts` after closing Veyra. Use Settings→About for custom paths. Same-flavour in-place overlay is possible after exit but leaves stale components. [Steps](docs/RELEASE_NOTES_2.1.2.md#升级并保留设置).
+**Keep your settings when upgrading.** Close Veyra and run the matching Setup to update an existing installation in place. For a new installation or portable folder, copy `runtime_local/user-data-2.0.0` and custom `runtime_local/luts` from the old copy. Settings → About shows the data location for custom paths.
 
-**Historical 2.1.0→2.1.1 migration:** close Veyra and back up user data first. Overlay the matching GPU package contents into the existing executable directory to retain its data folder. For a new installation directory on the same PC, open Settings→About→User data in the old version, then close it and copy its `user-data-2.0.0` folder into the new package’s `runtime_local` directory. Copy only the data folder to keep the new runtime files; custom data-directory launches use the location shown in the app.
-
-## Using 2.0
+## Using Veyra
 
 ### Sources and pages
 
@@ -168,14 +192,14 @@ Select Nodes at the top of Professional. This is an executable chain editor:
 5. Optical flow is shared after input; SR is a single instance. RTX Video HDR stays before final FG; select one DLSS/XeSS/FSR backend. This is not an arbitrary branching/mixing graph.
 6. List and Node settings, presets and sessions are separate. Returning to List restores its settings and retains the node graph. Switching rebuilds processing and may briefly pause the picture.
 
-**2.0.8 Node mode does not support offline export or List mode's global NR protection region.** Switch to List and verify its effects before exporting; graphs are not silently converted.
+**Node mode does not support offline export or List mode's global NR protection region.** Switch to List and verify its effects before exporting; graphs are not silently converted.
 
 ### Capture and streaming
 
 | Source | Setup |
 |---|---|
 | Capture card | Select device, resolution, rate, then a supported pixel format and audio input. Close competing apps. Match PQ/HLG/709 and Limited/Full to the signal. Magewell Pro Capture has a dedicated low-latency option. |
-| PS5 | Enable Remote Play, discover/enter IP, use PSN Account ID and the console's eight-digit pairing code; reconnect saved hosts. |
+| PS5 | Enable Remote Play and discover/enter the console IP. Click **Get Account ID** to open [PSNTools](https://www.psntools.com/psn/checker), copy the numeric or Base64 Account ID back into Veyra, then enter the console’s eight-digit pairing code. Saved consoles reconnect directly. |
 | PC | Install/configure Sunshine yourself; discover/add the host, PIN-pair, select app/desktop and connect. Sunshine is not bundled. |
 | Xbox | Follow device-code sign-in and select a console with remote features enabled. Unofficial/experimental; account, service and console restrictions apply. |
 | Screen | Select a window/display; avoid recursively capturing Veyra itself. |
@@ -198,7 +222,7 @@ For OBS Game Capture, enable **Settings → General & appearance → OBS Game Ca
 
 **Monitoring compatibility** defaults to Auto: when RTSS (MSI Afterburner OSD) is running at launch, the interface uses software rendering and its OSD appears on the video only. If RTSS starts later, restart Veyra when prompted. Using RTSS with OBS Game Capture requires RTSS’s “Use Microsoft Detours API hooking” option for Veyra, or use OBS Window Capture.
 
-**2.0.8 settings:** select a compute GPU, optionally enable RTX50 DLSS performance mode or variable refresh, and check update status. Startup checks show a temporary banner only for a newer release. Douyin Live Companion detection uses a software interface at launch and temporarily caps requested realtime GPU priority at High while it is running, restoring the requested value afterwards.
+**Settings:** select a compute GPU, optionally enable RTX50 DLSS performance mode or variable refresh, and check update status. Startup checks show a temporary banner only for a newer release. Douyin Live Companion detection uses a software interface at launch and temporarily caps requested realtime GPU priority at High while it is running, restoring the requested value afterwards.
 
 Settings include language/scale, shortcuts, monitoring GPU, audio devices and component info. Report GPU/driver, media, effects, time and `logs/veyra-qml.log`; include a crash `.dmp` if available. Review private data before sharing.
 
@@ -227,22 +251,31 @@ QML renders UI; native D3D12 renders video. List/Nodes share the engine, disconn
 
 ## Source and build
 
+ANR host source is traceable; beta runtime files are excluded under upstream restrictions.
+
 Developer entry: [current documentation](docs/README.md), [build and validation](docs/DEVELOPMENT.md), [UI code responsibilities](docs/ARCHITECTURE.md). Historical task notes are indexed separately.
 
-Original code: GPL-3.0. The combined Chiaki streaming application is also subject to AGPL-3.0 and its OpenSSL exception (licenses/remoteplay). [Third-party notices](THIRD_PARTY_NOTICES.md), [2.1.2 build/source](docs/BUILD_2.1.2.md). Source Git excludes proprietary runtimes/models. Release manifests audit publisher files, not hash-lock user DLL replacements.
+Original code: GPL-3.0. The combined Chiaki streaming application is also subject to AGPL-3.0 and its OpenSSL exception (licenses/remoteplay). [Third-party notices](THIRD_PARTY_NOTICES.md), [2.2.0 build and corresponding source](docs/BUILD_2.2.0.md). Source Git excludes proprietary runtimes/models. Release manifests audit publisher files, not hash-lock user DLL replacements.
 
 ## Support
 
 <p align="center">
   <a href="https://discord.gg/qetVZTRkC"><img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join Veyra on Discord" height="36"></a>
   &nbsp;&nbsp;
-  <a href="https://ko-fi.com/likely7"><img src="https://storage.ko-fi.com/cdn/kofi5.png?v=6" alt="Support Veyra on Ko-fi" height="36"></a>
+  <a href="https://www.patreon.com/cw/Likely7" title="Patreon 主页 / Creator page"><img src="https://raw.githubusercontent.com/Likely7/Veyra-NRVideo/main/docs/images/support/patreon-home.svg" alt="Patreon 主页 / Creator page" height="36"></a>
+  &nbsp;&nbsp;
+  <a href="https://www.patreon.com/Likely7/posts/buy-me-coffee-175018110" title="请我喝杯咖啡 · US$5 / Coffee support"><img src="https://raw.githubusercontent.com/Likely7/Veyra-NRVideo/main/docs/images/support/patreon-coffee.svg" alt="☕ 请我喝杯咖啡 · US$5 / Coffee support" height="36"></a>
+</p>
+
+<p align="center">
+  Patreon 主页查看作者动态；☕ 咖啡按钮直达 US$5 赞助页面。<br>
+  Visit the creator page for updates, or open the US$5 coffee support page.
 </p>
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Likely7/Veyra-NRVideo/v1.4.0/docs/images/1.4.0/donate-wechat.jpg" alt="WeChat donation" width="220">
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="https://raw.githubusercontent.com/Likely7/Veyra-NRVideo/main/docs/images/community/group-9-20261110.png" alt="Veyra community group 9" width="220">
+  <img src="https://raw.githubusercontent.com/Likely7/Veyra-NRVideo/main/docs/images/community/group-15-20261119.png" alt="Veyra community group 15" width="220">
 </p>
 
-Left: optional donation, no feature restrictions. Right: community group 9; QR valid **before 2026-11-17** as shown. Check repository updates after expiry.
+Left: optional donation, no feature restrictions. Right: community group 15; QR valid **before 2026-11-26** as shown. Check repository updates after expiry.
